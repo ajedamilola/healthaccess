@@ -1,18 +1,20 @@
 import hmac
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import Forbidden, Unauthenticated
+from app.core.config import settings
+from app.core.errors import Forbidden, ReauthRequired, Unauthenticated
 from app.core.security import digest
 from app.core.sessions import CSRF_COOKIE, SESSION_COOKIE
 from app.db.session import get_db
 from app.models.account import Account, AuthSession, Role
 from app.models.patient import PatientProfile
 
-SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+SAFE_METHODS  = {"GET", "HEAD", "OPTIONS"}
+RECENT_SIGNIN = timedelta(minutes=15)
 
 
 def optional_session(request: Request, db: Session = Depends(get_db)) -> AuthSession | None:
@@ -67,6 +69,14 @@ def current_patient(acc: Account = Depends(require_role(Role.patient)), db: Sess
     patient = db.scalar(select(PatientProfile).where(PatientProfile.account_id == acc.id))
     if not patient:
         raise Forbidden()
+    return patient
+
+
+def recent_patient(sess: AuthSession = Depends(current_session), patient: PatientProfile = Depends(current_patient)) -> PatientProfile:
+    # sessions don't store a sign-in time, but expires_at is set from it, so work it back
+    signed_in = sess.expires_at - timedelta(minutes=settings.session_ttl_minutes)
+    if datetime.now(timezone.utc) - signed_in > RECENT_SIGNIN:
+        raise ReauthRequired()
     return patient
 
 

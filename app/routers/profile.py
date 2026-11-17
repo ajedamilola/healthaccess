@@ -1,14 +1,18 @@
+from datetime import datetime, timezone
+
 import jsonschema
 from fastapi import APIRouter, Depends, Header, Request, Response
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from app.core.security import decrypt_code
-from app.core.deps import current_patient, verify_csrf
+from app.core.audit import log_event
+from app.core.security import decrypt_code, digest, encrypt_code, new_patient_code
+from app.core.deps import current_patient, recent_patient, verify_csrf
 from app.core.errors import StaleVersion, Unprocessable
 from app.core.responses import ok
 from app.db.session import get_db
 from app.models.patient import EmergencyField, FieldDefinition, PatientCode, PatientFieldValue, PatientProfile
+from app.models.sharing import AccessGrant, RecordReadSession
 from app.schemas.profile import ProfileOut, ProfilePatch
 
 router = APIRouter(prefix="/me", tags=["profile"], dependencies=[Depends(verify_csrf)])
@@ -117,3 +121,33 @@ def read_patient_code(
 ):
     row = db.get(PatientCode, patient.id)
     return ok(request, {"patient_code": decrypt_code(row.code_ciphertext)})
+
+
+@router.post("/patient-code/rotate")
+def rotate_patient_code(
+    request: Request,
+    patient: PatientProfile = Depends(recent_patient),
+    db: Session = Depends(get_db),
+):
+    now  = datetime.now(timezone.utc)
+    code = new_patient_code()
+
+    # lock the code row so two rotations can't race
+    row = db.scalar(select(PatientCode).where(PatientCode.patient_id == patient.id).with_for_update())
+    row.code_digest     = digest(code)
+    row.code_ciphertext = encrypt_code(code)
+    row.rotated_at      = now
+
+    # live grants die with the old code; expired ones are left alone so their history stays true
+    db.execute(update(AccessGrant).where(
+        AccessGrant.patient_id == patient.id, AccessGrant.revoked_at.is_(None), AccessGrant.expires_at > now,
+    ).values(revoked_at=now))
+    db.execute(update(RecordReadSession).where(
+        RecordReadSession.grant_id.in_(select(AccessGrant.id).where(AccessGrant.patient_id == patient.id)),
+        RecordReadSession.revoked_at.is_(None),
+    ).values(revoked_at=now))
+
+    log_event(db, request, patient_id=patient.id, actor_id=patient.account_id, action="patient_code_rotated")
+    db.commit()
+
+    return ok(request, {"patient_code": code})

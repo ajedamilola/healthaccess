@@ -20,6 +20,9 @@ class Unauthenticated(AppError):
 class Forbidden(AppError):
     status, code, message = 403, "FORBIDDEN", "You do not have access to this."
 
+class ReauthRequired(AppError):
+    status, code, message = 403, "RECENT_SIGNIN_REQUIRED", "Sign in again to do this."
+
 class NotFound(AppError):
     # also used for failed code lookups, so nothing leaks
     status, code, message = 404, "NOT_FOUND", "Not found."
