@@ -62,3 +62,14 @@ class ProfileUseConsent(Base, UUIDMixin):
     linked_phone_id : Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     expires_at      : Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at      : Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class IdempotencyRecord(Base, UUIDMixin):
+    __tablename__ = "idempotency_records"
+    __table_args__ = (UniqueConstraint("actor_scope", "idem_key"),)
+
+    actor_scope        : Mapped[str]            = mapped_column(String)   # e.g. "grant:<account_id>"
+    idem_key           : Mapped[str]            = mapped_column(String)
+    request_digest     : Mapped[str]            = mapped_column(String)
+    resource_id        : Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    response_ciphertext: Mapped[str | None]     = mapped_column(String, nullable=True)  # encrypted, short-lived
+    expires_at         : Mapped[datetime]       = mapped_column(DateTime(timezone=True), index=True)

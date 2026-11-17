@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import current_account, current_session, verify_csrf
 from app.core.errors import Conflict, Unauthenticated
+from app.core.config import settings
+from app.core.ratelimit import rate_limit
 from app.core.responses import ok
 from app.core.security import (
     digest, encrypt_code, hash_password, new_patient_code, verify_password,
@@ -26,7 +28,7 @@ def _account_out(db: Session, acc: Account) -> AccountOut:
     return AccountOut(id=acc.id, email=acc.email_normalized, roles=[r.role for r in acc.roles], patient_id=patient_id)
 
 
-@router.post("/register", status_code=201)
+@router.post("/register", status_code=201, dependencies=[Depends(rate_limit("register", settings.login_rate_per_min))])
 def register(body: RegisterIn, request: Request, db: Session = Depends(get_db)):
     try:
         acc = Account(email_normalized=body.email.strip().lower(), password_hash=hash_password(body.password))
@@ -52,7 +54,7 @@ def register(body: RegisterIn, request: Request, db: Session = Depends(get_db)):
     return ok(request, _account_out(db, acc))
 
 
-@router.post("/login")
+@router.post("/login", dependencies=[Depends(rate_limit("login", settings.login_rate_per_min))])
 def login(body: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
     acc = db.scalar(select(Account).where(Account.email_normalized == body.email.strip().lower()))
 

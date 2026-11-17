@@ -5,7 +5,7 @@ from app.core.config import settings
 from app.core.errors import register_handlers
 from app.middleware.no_store import NoStoreMiddleware
 from app.middleware.request_id import RequestIDMiddleware
-from app.routers import auth, emergency, profile
+from app.routers import auth, emergency, profile, records, sharing
 
 app = FastAPI(title="HealthAccess Online API", docs_url="/api/v1/docs", openapi_url="/api/v1/openapi.json")
 
@@ -25,3 +25,5 @@ app.add_middleware(RequestIDMiddleware)
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(profile.router, prefix="/api/v1")
 app.include_router(emergency.router, prefix="/api/v1")
+app.include_router(sharing.router, prefix="/api/v1")
+app.include_router(records.router, prefix="/api/v1")
