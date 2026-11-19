@@ -96,6 +96,7 @@ export const symptomHandlers = [
       summary: message.slice(0, 160),
       include_records: String(form.get("includeRecords")) === "true",
       modify_history: String(form.get("modifyHistory")) !== "false",
+      language: String(form.get("language") ?? "en"),
       files: files.map((file) => `symptom/${id}/${file.name}`),
       thread_id: `symptom_${id}`,
     };
@@ -180,6 +181,7 @@ export const symptomHandlers = [
       summary: message.slice(0, 160),
       include_records: String(form.get("includeRecords")) === "true",
       modify_history: String(form.get("modifyHistory")) !== "false",
+      language: String(form.get("language") ?? "en"),
       files: files.map((file) => `symptom/${id}/${file.name}`),
       thread_id: `symptom_${id}`,
     };

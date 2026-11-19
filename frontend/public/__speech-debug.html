@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>speech debug</title>
+<button id="play">Play</button>
+<button id="stop">Stop</button>
+<pre id="log"></pre>
+<script>
+const log = (m) => { document.getElementById('log').textContent += m + "\n"; console.log(m); };
+let audio = null, url = null, pending = null;
+document.getElementById('play').onclick = async () => {
+  document.cookie = "ha_at=test; path=/";
+  const res = await fetch('/api/tts', { method: 'POST', headers: {'content-type':'application/json','x-ha-client':'web'}, body: JSON.stringify({text:'Bawo ni, eyi ni idanwo ohun.', language:'yo'}) });
+  log('fetch ' + res.status + ' ' + res.headers.get('content-type'));
+  const blob = await res.blob();
+  log('blob ' + blob.size + ' ' + blob.type);
+  url = URL.createObjectURL(blob);
+  audio = new Audio(url);
+  const pause = audio.pause.bind(audio);
+  audio.pause = (...a) => { log('pause called'); return pause(...a); };
+  const load = audio.load.bind(audio);
+  audio.load = (...a) => { log('load called'); return load(...a); };
+  audio.onended = () => log('ended');
+  audio.onerror = () => log('error ' + (audio.error && audio.error.code));
+  pending = audio.play();
+  pending.then(() => log('play resolved'), (e) => log('play rejected ' + e.name + ': ' + e.message));
+};
+document.getElementById('stop').onclick = () => { if (pending) pending.finally(() => { audio.pause(); audio.removeAttribute('src'); audio.load(); }); };
+</script>

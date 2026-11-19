@@ -10,7 +10,14 @@ import { streamSymptom } from "@/api/stream";
 export type StreamPhase = "idle" | "streaming" | "error" | "cancelled";
 
 export type StreamRequest =
-  | { mode: "create"; message: string; files: File[]; includeRecords: boolean; modifyHistory: boolean }
+  | {
+      mode: "create";
+      message: string;
+      files: File[];
+      includeRecords: boolean;
+      modifyHistory: boolean;
+      language: string;
+    }
   | { mode: "followup"; id: string; message: string; files: File[] };
 
 export interface PendingTurn {
@@ -40,6 +47,7 @@ function formFor(request: StreamRequest) {
   if (request.mode === "create") {
     body.append("includeRecords", String(request.includeRecords));
     body.append("modifyHistory", String(request.modifyHistory));
+    body.append("language", request.language);
   }
   request.files.forEach((file) => body.append("images", file, file.name));
   return body;

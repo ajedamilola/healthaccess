@@ -211,21 +211,22 @@ export function getSymptomAgent(context: SymptomAgentContext) {
 export async function withPatientContext(
   context: SymptomAgentContext,
 ): Promise<SymptomAgentContext> {
+  const chosen = context.language ? languageName(context.language) : null;
   if (!context.includeRecords) {
-    return { ...context, patientContext: null, language: null, emergencyNumber: null };
+    return { ...context, patientContext: null, language: chosen, emergencyNumber: null };
   }
   try {
     const snapshot = await buildPatientSnapshot(context.patientId);
-    if (!snapshot) return context;
+    if (!snapshot) return { ...context, language: chosen };
     return {
       ...context,
       patientContext: renderSnapshot(snapshot),
-      language: languageName(snapshot.preferredLanguage),
+      language: chosen ?? languageName(snapshot.preferredLanguage),
       emergencyNumber: snapshot.emergencyNumber ?? emergencyNumberFor(snapshot.location.country),
     };
   } catch {
     // The assistant still works without personal context; the tool can retry the lookup.
-    return context;
+    return { ...context, language: chosen };
   }
 }
 

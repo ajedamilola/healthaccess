@@ -21,11 +21,18 @@ import {
 
 export const SYMPTOM_PAGE_SIZE = 10;
 
-function symptomForm(message: string, includeRecords?: boolean, modifyHistory?: boolean, files: File[] = []) {
+function symptomForm(
+  message: string,
+  includeRecords?: boolean,
+  modifyHistory?: boolean,
+  files: File[] = [],
+  language?: string,
+) {
   const body = new FormData();
   body.append("message", message);
   if (includeRecords !== undefined) body.append("includeRecords", String(includeRecords));
   if (modifyHistory !== undefined) body.append("modifyHistory", String(modifyHistory));
+  if (language !== undefined) body.append("language", language);
   files.forEach((file) => body.append("images", file, file.name));
   return body;
 }
@@ -64,6 +71,7 @@ export interface CreateSymptomInput {
   message: string;
   includeRecords: boolean;
   modifyHistory: boolean;
+  language: string;
   files: File[];
   signal: AbortSignal;
 }
@@ -76,12 +84,13 @@ export function useCreateSymptom() {
         message: input.message,
         includeRecords: input.includeRecords,
         modifyHistory: input.modifyHistory,
+        language: input.language,
       });
       return request<SymptomCreateResponse>(
         {
           method: "POST",
           url: "/symptom",
-          data: symptomForm(body.message, body.includeRecords, body.modifyHistory, input.files),
+          data: symptomForm(body.message, body.includeRecords, body.modifyHistory, input.files, body.language),
           timeout: aiTimeout,
           signal: input.signal,
         },

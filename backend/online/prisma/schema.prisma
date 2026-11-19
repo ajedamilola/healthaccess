@@ -1086,6 +1086,7 @@ model SymptomAnalysis {
   summary         String?
   include_records Boolean   @default(true)
   modify_history  Boolean   @default(true)
+  language        String    @default("en")
   files           String[]  @default([])
   thread_id       String?   @unique
   model_version   String?

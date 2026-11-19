@@ -8,9 +8,9 @@ import { Alert } from "@/components/arc/alert/alert";
 import { Button } from "@/components/arc/button/button";
 import { Switch } from "@/components/arc/switch/switch";
 import { useSession } from "@/api/hooks/session";
-import { useMe, useUpdateMe } from "@/api/hooks/record";
+import { useMe } from "@/api/hooks/record";
 import { Select } from "@/components/arc/select/select";
-import { ASSISTANT_LANGUAGES, assistantCopy, assistantLocale } from "./i18n";
+import { ASSISTANT_LANGUAGES, assistantCopy, assistantLocale, type AssistantLocale } from "./i18n";
 import { ChatInput, ChatMessages, ContextCard, ConversationSidebar, StreamError } from "./ChatParts";
 import { useAssistantStream } from "./useAssistantStream";
 import styles from "./chat.module.css";
@@ -51,11 +51,11 @@ export function AssistantPage() {
   const [override, setIncludeRecords] = useState<boolean | null>(null);
   const includeRecords = override ?? stored;
   const [modifyHistory, setModifyHistory] = useState(true);
+  const [languageChoice, setLanguageChoice] = useState<AssistantLocale | null>(null);
 
   const name = firstName(session.data?.account?.display_name);
   const me = useMe();
-  const updateMe = useUpdateMe();
-  const language = assistantLocale(me.data?.profile.preferred_language);
+  const language = languageChoice ?? assistantLocale(me.data?.profile.preferred_language);
   const text = assistantCopy(language);
   const streaming = stream.phase === "streaming";
   const active = stream.phase !== "idle" || Boolean(stream.pending);
@@ -66,7 +66,14 @@ export function AssistantPage() {
   }
 
   async function send(message: string, files: File[]) {
-    const done = await stream.start({ mode: "create", message, files, includeRecords, modifyHistory });
+    const done = await stream.start({
+      mode: "create",
+      message,
+      files,
+      includeRecords,
+      modifyHistory,
+      language,
+    });
     if (done) router.replace(`/app/assistant/${done.symptom.id}`);
   }
 
@@ -98,14 +105,6 @@ export function AssistantPage() {
 
         {optionsOpen ? (
           <div className={styles.details}>
-            <Select
-              label={text.languageLabel}
-              description={text.languageHint}
-              options={[...ASSISTANT_LANGUAGES]}
-              value={language}
-              disabled={!me.data || updateMe.isPending}
-              onValueChange={(value) => updateMe.mutate({ preferredLanguage: value })}
-            />
             <div className={styles.option}>
               <div className={styles.optionCopy}>
                 <p className={styles.optionTitle} id="opt-records">
@@ -149,6 +148,7 @@ export function AssistantPage() {
           activity={stream.activity}
           phase={stream.phase}
           userInitial={name.charAt(0).toUpperCase()}
+          language={language}
         >
           {!active ? (
             <div className={styles.welcome}>
@@ -157,6 +157,15 @@ export function AssistantPage() {
               </span>
               <h2 className={styles.greeting}>{text.greeting(name)}</h2>
               <p className={styles.lead}>{text.lead}</p>
+              <div className={styles.languagePick}>
+                <Select
+                  label={text.languageLabel}
+                  description={text.languageHint}
+                  options={[...ASSISTANT_LANGUAGES]}
+                  value={language}
+                  onValueChange={(value) => setLanguageChoice(assistantLocale(value))}
+                />
+              </div>
               <ContextCard enabled={includeRecords} />
               <div className={styles.suggestions}>
                 {text.suggestions.map((suggestion) => (

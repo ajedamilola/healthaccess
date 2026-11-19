@@ -31,7 +31,7 @@ const copy: Record<AssistantLocale, Copy> = {
     ],
     placeholder: "Describe how you feel…",
     languageLabel: "Reply language",
-    languageHint: "The assistant answers in this language. It is saved to your profile.",
+    languageHint: "The assistant answers in this language for this conversation.",
   },
   pcm: {
     greeting: (name) => (name ? `How far ${name}, how your body dey?` : "How your body dey today?"),
@@ -44,7 +44,7 @@ const copy: Record<AssistantLocale, Copy> = {
     ],
     placeholder: "Tell me how your body dey…",
     languageLabel: "Language wey I go take reply",
-    languageHint: "The assistant go answer you for dis language. E go save for your profile.",
+    languageHint: "The assistant go answer you for dis language for dis chat.",
   },
   yo: {
     greeting: (name) => (name ? `E kaabo ${name}, bawo ni ara re?` : "Bawo ni ara re loni?"),
@@ -57,7 +57,7 @@ const copy: Record<AssistantLocale, Copy> = {
     ],
     placeholder: "So bi ara re se ri…",
     languageLabel: "Ede idahun",
-    languageHint: "Oluranlowo yoo dahun ni ede yii. A o fi pamo si profaili re.",
+    languageHint: "Oluranlowo yoo dahun ni ede yii fun ibaraenisoro yii.",
   },
   ha: {
     greeting: (name) => (name ? `Sannu ${name}, yaya jikinka?` : "Yaya jikinka yau?"),
@@ -70,7 +70,7 @@ const copy: Record<AssistantLocale, Copy> = {
     ],
     placeholder: "Bayyana yadda kake ji…",
     languageLabel: "Harshen amsa",
-    languageHint: "Mataimakin zai amsa da wannan harshe. Za a ajiye shi a bayananka.",
+    languageHint: "Mataimakin zai amsa da wannan harshe a wannan tattaunawa.",
   },
   ig: {
     greeting: (name) => (name ? `Ndewo ${name}, kedu ka ahu di gi?` : "Kedu ka ahu di gi taa?"),
@@ -83,7 +83,7 @@ const copy: Record<AssistantLocale, Copy> = {
     ],
     placeholder: "Kowaa otu ahu di gi…",
     languageLabel: "Asusu nzaghachi",
-    languageHint: "Onye enyemaka ga-aza n'asusu a. A ga-echekwa ya na profaili gi.",
+    languageHint: "Onye enyemaka ga-aza n'asusu a maka mkparita uka a.",
   },
 };
 

@@ -33,6 +33,12 @@
           "description": "Allow the agent to update the stored name, severity and summary. Default true."
         },
         {
+          "name": "language",
+          "type": "string",
+          "required": false,
+          "description": "Language code for this conversation (for example en, pcm, yo, ha, ig). Defaults to the profile's preferred language, then en."
+        },
+        {
           "name": "images",
           "type": "file[]",
           "required": false,
@@ -57,6 +63,7 @@
               "summary": "Mild headache and runny nose for two days.",
               "include_records": true,
               "modify_history": true,
+              "language": "en",
               "files": [],
               "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
               "model_version": "openrouter",
@@ -131,7 +138,7 @@
             "connection": "keep-alive",
             "x-accel-buffering": "no"
           },
-          "body": "event: record\ndata: {\"symptom\":{\"id\":\"ab143840-0058-4486-aa0d-2faf0c88121a\",\"patient_id\":\"20000000-0000-4000-8000-000000000005\",\"account_id\":\"20000000-0000-4000-8000-000000000004\",\"name\":null,\"severity\":null,\"summary\":null,\"include_records\":true,\"modify_history\":true,\"files\":[],\"thread_id\":\"symptom_ab143840-0058-4486-aa0d-2faf0c88121a\",\"model_version\":\"openrouter\",\"created_at\":\"2026-11-17T16:13:58.179Z\",\"updated_at\":\"2026-11-17T16:13:58.181Z\"}}\n\nevent: step\ndata: {\"id\":\"b0e6e5c2-3f6f-4a0e-9a6e-4b0c1d3a2f11\",\"name\":\"lookupPatientDetails\",\"status\":\"started\",\"input\":{}}\n\nevent: step\ndata: {\"id\":\"b0e6e5c2-3f6f-4a0e-9a6e-4b0c1d3a2f11\",\"name\":\"lookupPatientDetails\",\"status\":\"completed\",\"output\":\"{\\\"allergies\\\":[],\\\"conditions\\\":[],\\\"recentSymptomNames\\\":[]}\"}\n\nevent: step\ndata: {\"id\":\"d7c0f0a4-8cf2-45f3-b0c8-1f3c5b6e8a02\",\"name\":\"editSymptomAnalysis\",\"status\":\"started\",\"input\":{\"symptomName\":\"Mild headache and runny nose\",\"severity\":\"MILD\"}}\n\nevent: step\ndata: {\"id\":\"d7c0f0a4-8cf2-45f3-b0c8-1f3c5b6e8a02\",\"name\":\"editSymptomAnalysis\",\"status\":\"completed\",\"output\":\"Symptom analysis updated successfully\"}\n\nevent: token\ndata: {\"content\":\"A mild headache with a runny nose for two days\"}\n\nevent: token\ndata: {\"content\":\" is often due to a common viral infection.\"}\n\nevent: done\ndata: {\"symptom\":{\"id\":\"ab143840-0058-4486-aa0d-2faf0c88121a\",\"patient_id\":\"20000000-0000-4000-8000-000000000005\",\"account_id\":\"20000000-0000-4000-8000-000000000004\",\"name\":\"Mild headache and runny nose\",\"severity\":\"MILD\",\"summary\":\"Mild headache and runny nose for two days.\",\"include_records\":true,\"modify_history\":true,\"files\":[],\"thread_id\":\"symptom_ab143840-0058-4486-aa0d-2faf0c88121a\",\"model_version\":\"openrouter\",\"created_at\":\"2026-11-17T16:13:58.179Z\",\"updated_at\":\"2026-11-17T16:14:08.281Z\"},\"messages\":[{\"type\":\"Human\",\"content\":\"I have had a mild headache and a runny nose for two days.\"},{\"type\":\"AI\",\"content\":\"A mild headache with a runny nose for two days is often due to a common viral infection.\"}]}\n"
+          "body": "event: record\ndata: {\"symptom\":{\"id\":\"ab143840-0058-4486-aa0d-2faf0c88121a\",\"patient_id\":\"20000000-0000-4000-8000-000000000005\",\"account_id\":\"20000000-0000-4000-8000-000000000004\",\"name\":null,\"severity\":null,\"summary\":null,\"include_records\":true,\"modify_history\":true,\"language\":\"en\",\"files\":[],\"thread_id\":\"symptom_ab143840-0058-4486-aa0d-2faf0c88121a\",\"model_version\":\"openrouter\",\"created_at\":\"2026-11-17T16:13:58.179Z\",\"updated_at\":\"2026-11-17T16:13:58.181Z\"}}\n\nevent: step\ndata: {\"id\":\"b0e6e5c2-3f6f-4a0e-9a6e-4b0c1d3a2f11\",\"name\":\"lookupPatientDetails\",\"status\":\"started\",\"input\":{}}\n\nevent: step\ndata: {\"id\":\"b0e6e5c2-3f6f-4a0e-9a6e-4b0c1d3a2f11\",\"name\":\"lookupPatientDetails\",\"status\":\"completed\",\"output\":\"{\\\"allergies\\\":[],\\\"conditions\\\":[],\\\"recentSymptomNames\\\":[]}\"}\n\nevent: step\ndata: {\"id\":\"d7c0f0a4-8cf2-45f3-b0c8-1f3c5b6e8a02\",\"name\":\"editSymptomAnalysis\",\"status\":\"started\",\"input\":{\"symptomName\":\"Mild headache and runny nose\",\"severity\":\"MILD\"}}\n\nevent: step\ndata: {\"id\":\"d7c0f0a4-8cf2-45f3-b0c8-1f3c5b6e8a02\",\"name\":\"editSymptomAnalysis\",\"status\":\"completed\",\"output\":\"Symptom analysis updated successfully\"}\n\nevent: token\ndata: {\"content\":\"A mild headache with a runny nose for two days\"}\n\nevent: token\ndata: {\"content\":\" is often due to a common viral infection.\"}\n\nevent: done\ndata: {\"symptom\":{\"id\":\"ab143840-0058-4486-aa0d-2faf0c88121a\",\"patient_id\":\"20000000-0000-4000-8000-000000000005\",\"account_id\":\"20000000-0000-4000-8000-000000000004\",\"name\":\"Mild headache and runny nose\",\"severity\":\"MILD\",\"summary\":\"Mild headache and runny nose for two days.\",\"include_records\":true,\"modify_history\":true,\"language\":\"en\",\"files\":[],\"thread_id\":\"symptom_ab143840-0058-4486-aa0d-2faf0c88121a\",\"model_version\":\"openrouter\",\"created_at\":\"2026-11-17T16:13:58.179Z\",\"updated_at\":\"2026-11-17T16:14:08.281Z\"},\"messages\":[{\"type\":\"Human\",\"content\":\"I have had a mild headache and a runny nose for two days.\"},{\"type\":\"AI\",\"content\":\"A mild headache with a runny nose for two days is often due to a common viral infection.\"}]}\n"
         },
         {
           "status": 503,
@@ -202,6 +209,7 @@
                 "summary": "Mild headache and runny nose for two days.",
                 "include_records": true,
                 "modify_history": true,
+                "language": "en",
                 "files": [],
                 "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
                 "model_version": "openrouter",
@@ -270,6 +278,7 @@
               "summary": "Mild headache and runny nose for two days.",
               "include_records": true,
               "modify_history": true,
+              "language": "en",
               "files": [],
               "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
               "model_version": "openrouter",
@@ -358,6 +367,7 @@
               "summary": "Mild headache and runny nose for two days; headache gets a little worse in the evening.",
               "include_records": true,
               "modify_history": true,
+              "language": "en",
               "files": [],
               "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
               "model_version": "openrouter",
@@ -427,7 +437,7 @@
             "connection": "keep-alive",
             "x-accel-buffering": "no"
           },
-          "body": "event: record\ndata: {\"symptom\":{\"id\":\"ab143840-0058-4486-aa0d-2faf0c88121a\",\"patient_id\":\"20000000-0000-4000-8000-000000000005\",\"account_id\":\"20000000-0000-4000-8000-000000000004\",\"name\":\"Mild headache and runny nose\",\"severity\":\"MILD\",\"summary\":\"Mild headache and runny nose for two days.\",\"include_records\":true,\"modify_history\":true,\"files\":[],\"thread_id\":\"symptom_ab143840-0058-4486-aa0d-2faf0c88121a\",\"model_version\":\"openrouter\",\"created_at\":\"2026-11-17T16:13:58.179Z\",\"updated_at\":\"2026-11-17T16:14:08.281Z\"}}\n\nevent: token\ndata: {\"content\":\"A slight increase in the evening\"}\n\nevent: token\ndata: {\"content\":\" is not necessarily a reason to worry.\"}\n\nevent: done\ndata: {\"symptom\":{\"id\":\"ab143840-0058-4486-aa0d-2faf0c88121a\",\"patient_id\":\"20000000-0000-4000-8000-000000000005\",\"account_id\":\"20000000-0000-4000-8000-000000000004\",\"name\":\"Mild headache and runny nose\",\"severity\":\"MILD\",\"summary\":\"Mild headache and runny nose for two days; headache gets a little worse in the evening.\",\"include_records\":true,\"modify_history\":true,\"files\":[],\"thread_id\":\"symptom_ab143840-0058-4486-aa0d-2faf0c88121a\",\"model_version\":\"openrouter\",\"created_at\":\"2026-11-17T16:13:58.179Z\",\"updated_at\":\"2026-11-17T16:14:37.432Z\"},\"messages\":[{\"type\":\"Human\",\"content\":\"I have had a mild headache and a runny nose for two days.\"},{\"type\":\"AI\",\"content\":\"A mild headache with a runny nose for two days is often due to a common viral infection.\"},{\"type\":\"Human\",\"content\":\"Should I be worried if the headache gets a little worse in the evening?\"},{\"type\":\"AI\",\"content\":\"A slight increase in the evening is not necessarily a reason to worry. Seek urgent care for a sudden or severe headache, confusion, weakness or numbness, vision changes, a stiff neck with fever, or repeated vomiting.\"}]}\n"
+          "body": "event: record\ndata: {\"symptom\":{\"id\":\"ab143840-0058-4486-aa0d-2faf0c88121a\",\"patient_id\":\"20000000-0000-4000-8000-000000000005\",\"account_id\":\"20000000-0000-4000-8000-000000000004\",\"name\":\"Mild headache and runny nose\",\"severity\":\"MILD\",\"summary\":\"Mild headache and runny nose for two days.\",\"include_records\":true,\"modify_history\":true,\"language\":\"en\",\"files\":[],\"thread_id\":\"symptom_ab143840-0058-4486-aa0d-2faf0c88121a\",\"model_version\":\"openrouter\",\"created_at\":\"2026-11-17T16:13:58.179Z\",\"updated_at\":\"2026-11-17T16:14:08.281Z\"}}\n\nevent: token\ndata: {\"content\":\"A slight increase in the evening\"}\n\nevent: token\ndata: {\"content\":\" is not necessarily a reason to worry.\"}\n\nevent: done\ndata: {\"symptom\":{\"id\":\"ab143840-0058-4486-aa0d-2faf0c88121a\",\"patient_id\":\"20000000-0000-4000-8000-000000000005\",\"account_id\":\"20000000-0000-4000-8000-000000000004\",\"name\":\"Mild headache and runny nose\",\"severity\":\"MILD\",\"summary\":\"Mild headache and runny nose for two days; headache gets a little worse in the evening.\",\"include_records\":true,\"modify_history\":true,\"language\":\"en\",\"files\":[],\"thread_id\":\"symptom_ab143840-0058-4486-aa0d-2faf0c88121a\",\"model_version\":\"openrouter\",\"created_at\":\"2026-11-17T16:13:58.179Z\",\"updated_at\":\"2026-11-17T16:14:37.432Z\"},\"messages\":[{\"type\":\"Human\",\"content\":\"I have had a mild headache and a runny nose for two days.\"},{\"type\":\"AI\",\"content\":\"A mild headache with a runny nose for two days is often due to a common viral infection.\"},{\"type\":\"Human\",\"content\":\"Should I be worried if the headache gets a little worse in the evening?\"},{\"type\":\"AI\",\"content\":\"A slight increase in the evening is not necessarily a reason to worry. Seek urgent care for a sudden or severe headache, confusion, weakness or numbness, vision changes, a stiff neck with fever, or repeated vomiting.\"}]}\n"
         },
         {
           "status": 404,
@@ -505,6 +515,7 @@
               "summary": "Mild headache and runny nose for two days; headache gets a little worse in the evening.",
               "include_records": true,
               "modify_history": true,
+              "language": "en",
               "files": [],
               "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
               "model_version": "openrouter",

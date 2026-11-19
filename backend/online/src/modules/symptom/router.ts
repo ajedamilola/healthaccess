@@ -75,6 +75,25 @@ const patchSchema = z
 
 const idSchema = z.string().uuid();
 
+const languageSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(/^[a-z]{2,3}(-[a-z0-9]{2,8})?$/)
+  .transform((value) => value.split('-')[0]!);
+
+function parseLanguage(value: unknown, fallback: string): string {
+  if (value === undefined || value === null || value === '') {
+    const parsedFallback = languageSchema.safeParse(fallback);
+    return parsedFallback.success ? parsedFallback.data : 'en';
+  }
+  const parsed = languageSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new AppError(400, 'Unsupported language', 'validation_error');
+  }
+  return parsed.data;
+}
+
 export interface SymptomRouterDeps {
   store: SymptomStore;
   ai: SymptomAi;
@@ -219,12 +238,16 @@ export function createSymptomRouter(overrides: Partial<SymptomRouterDeps> = {}):
         throw new AppError(404, 'Patient profile not found', 'not_found');
       }
 
+      const preferredLanguage = await store.findPreferredLanguage(accountId);
+      const language = parseLanguage(raw.language, preferredLanguage ?? 'en');
+
       const model = defaultChatModel();
       let symptom = await store.create({
         patient_id: patientId,
         account_id: accountId,
         include_records: includeRecords,
         modify_history: modifyHistory,
+        language,
         thread_id: null,
         model_version: model,
       });
@@ -256,6 +279,7 @@ export function createSymptomRouter(overrides: Partial<SymptomRouterDeps> = {}):
             symptomId: symptom.id,
             includeRecords,
             modifyHistory,
+            language,
             model,
             requestId: req.requestId,
           },
@@ -300,12 +324,16 @@ export function createSymptomRouter(overrides: Partial<SymptomRouterDeps> = {}):
         throw new AppError(404, 'Patient profile not found', 'not_found');
       }
 
+      const preferredLanguage = await store.findPreferredLanguage(accountId);
+      const language = parseLanguage(raw.language, preferredLanguage ?? 'en');
+
       const model = defaultChatModel();
       const record = await store.create({
         patient_id: patientId,
         account_id: accountId,
         include_records: includeRecords,
         modify_history: modifyHistory,
+        language,
         thread_id: null,
         model_version: model,
       });
@@ -336,6 +364,7 @@ export function createSymptomRouter(overrides: Partial<SymptomRouterDeps> = {}):
         symptomId: record.id,
         includeRecords,
         modifyHistory,
+        language,
         model,
         requestId: req.requestId,
       };
@@ -468,6 +497,7 @@ export function createSymptomRouter(overrides: Partial<SymptomRouterDeps> = {}):
             symptomId: symptom.id,
             includeRecords: symptom.include_records,
             modifyHistory: symptom.modify_history,
+            language: symptom.language,
             model,
             requestId: req.requestId,
           },
@@ -524,6 +554,7 @@ export function createSymptomRouter(overrides: Partial<SymptomRouterDeps> = {}):
         symptomId: symptom.id,
         includeRecords: symptom.include_records,
         modifyHistory: symptom.modify_history,
+        language: symptom.language,
         model,
         requestId: req.requestId,
       };

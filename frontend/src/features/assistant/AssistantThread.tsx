@@ -229,6 +229,7 @@ export function AssistantThread({ id }: { id: string }) {
           activity={stream.activity}
           phase={stream.phase}
           userInitial={initial}
+          language={symptom?.language}
         >
           {normaliseSeverity(symptom?.severity) === "SEVERE" ? (
             <div className={styles.urgent}>

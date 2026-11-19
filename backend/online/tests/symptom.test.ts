@@ -28,6 +28,7 @@ import type {
 class MemorySymptomStore implements SymptomStore {
   records = new Map<string, SymptomRecord>();
   patients = new Map<string, string>();
+  languages = new Map<string, string>();
 
   addPatient(accountId: string, patientId = randomUUID()) {
     this.patients.set(accountId, patientId);
@@ -46,6 +47,7 @@ class MemorySymptomStore implements SymptomStore {
       summary: null,
       include_records: true,
       modify_history: true,
+      language: 'en',
       files: [],
       thread_id: `symptom_${id}`,
       model_version: 'test-model',
@@ -59,6 +61,10 @@ class MemorySymptomStore implements SymptomStore {
 
   async findPatientId(accountId: string) {
     return this.patients.get(accountId) ?? null;
+  }
+
+  async findPreferredLanguage(accountId: string) {
+    return this.languages.get(accountId) ?? null;
   }
 
   async create(input: CreateSymptomRecordInput) {
@@ -270,6 +276,29 @@ test('POST /v1/symptom returns 503 and creates no record when AI is unconfigured
   assert.equal(response.status, 503);
   assert.equal(response.body.error, 'ai_unavailable');
   assert.equal(store.records.size, 0);
+});
+
+test('POST /v1/symptom stores the conversation language and falls back to the profile', async () => {
+  const store = new MemorySymptomStore();
+  store.addPatient('acct-a');
+  store.languages.set('acct-a', 'yo');
+  const ai = fakeAi();
+  const app = buildApp({ store, ai, storage: mockStorage().storage });
+
+  const chosen = await request(app)
+    .post('/v1/symptom')
+    .field('message', 'I have a headache')
+    .field('language', 'IG-NG');
+
+  assert.equal(chosen.status, 201);
+  assert.equal(chosen.body.symptom.language, 'ig');
+  assert.equal(ai.invocations[0]?.context.language, 'ig');
+
+  const fallback = await request(app).post('/v1/symptom').field('message', 'I have a cough');
+
+  assert.equal(fallback.status, 201);
+  assert.equal(fallback.body.symptom.language, 'yo');
+  assert.equal(ai.invocations[1]?.context.language, 'yo');
 });
 
 test('POST /v1/symptom stores normalized image keys and thread id', async () => {

@@ -13,6 +13,7 @@ export const symptomRecordSchema = z
     summary: z.string().nullable().optional(),
     include_records: z.boolean(),
     modify_history: z.boolean(),
+    language: z.string().min(1),
     files: z.array(z.string()),
     thread_id: z.string().min(1),
     model_version: z.string().nullable().optional(),
@@ -89,6 +90,7 @@ export const symptomCreateBodySchema = z.object({
   message: z.string().min(1).max(8000),
   includeRecords: z.boolean().default(false),
   modifyHistory: z.boolean().default(true),
+  language: z.string().min(2).max(16).default("en"),
 });
 
 export type SymptomCreateBody = z.infer<typeof symptomCreateBodySchema>;

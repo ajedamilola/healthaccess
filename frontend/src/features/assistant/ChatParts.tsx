@@ -12,6 +12,8 @@ import { useSymptoms } from "@/api/hooks/symptom";
 import type { ApiError } from "@/api/errors";
 import type { SymptomMessage } from "@/api/schemas";
 import { AssistantMessage } from "./AssistantMessage";
+import { ListenButton } from "./ListenButton";
+import { stopSpeech } from "./useSpeech";
 import { validateFiles, MAX_MESSAGE } from "./files";
 import { normaliseSeverity } from "./format";
 import type { PendingTurn, StreamPhase } from "./useAssistantStream";
@@ -114,6 +116,7 @@ export function ChatMessages({
   activity,
   phase,
   userInitial,
+  language,
   children,
 }: {
   messages: SymptomMessage[];
@@ -122,12 +125,15 @@ export function ChatMessages({
   activity: string | null;
   phase: StreamPhase;
   userInitial?: string;
+  language?: string | null;
   children?: React.ReactNode;
 }) {
   const end = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
   }, [messages.length, reply, pending, activity]);
+
+  useEffect(() => stopSpeech, []);
 
   const streaming = phase === "streaming";
   // While a turn is in flight (or failed), the user's message stays visible even before the server saves it.
@@ -141,7 +147,14 @@ export function ChatMessages({
           <li key={`${message.type}-${index}`} className={`${styles.row} ${message.type === "Human" ? styles.rowUser : ""}`}>
             <Avatar user={message.type === "Human"} initial={userInitial} />
             <div className={`${styles.bubble} ${message.type === "Human" ? styles.bubbleUser : ""}`}>
-              {message.type === "AI" ? <AssistantMessage content={message.content} /> : message.content}
+              {message.type === "AI" ? (
+                <>
+                  <AssistantMessage content={message.content} />
+                  <ListenButton id={`reply-${index}`} text={message.content} language={language} />
+                </>
+              ) : (
+                message.content
+              )}
             </div>
           </li>
         ))}

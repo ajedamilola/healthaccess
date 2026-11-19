@@ -22,6 +22,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { initialsAvatar } from "./avatar";
+import { useTheme } from "./useTheme";
 import styles from "./app-shell.module.css";
 
 const navItems = [
@@ -77,6 +78,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
+  const { theme, setTheme } = useTheme();
   const { data: session, error, isLoading } = useSession();
   const logout = useLogout();
   const router = useRouter();
@@ -171,7 +173,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               <UserMenu
                 user={{ name, email, avatarSrc: initialsAvatar(name) }}
                 showName
-                showTheme={false}
+                theme={theme}
+                onThemeChange={setTheme}
                 items={[
                   {
                     label: "Profile",

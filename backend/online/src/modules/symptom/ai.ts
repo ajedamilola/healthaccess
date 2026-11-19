@@ -20,6 +20,7 @@ export interface SymptomAiContext {
   symptomId: string;
   includeRecords: boolean;
   modifyHistory: boolean;
+  language?: string | null;
   model: string;
   requestId?: string;
 }
