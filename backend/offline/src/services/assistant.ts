@@ -38,6 +38,18 @@ const CONVERSE_INTENTS = [
   'unsupported',
 ] as const;
 
+/** What the model is asked for: every field present (nullable), as OpenAI strict mode requires. */
+const ConverseRequestSchema = z
+  .object({
+    intent: z.enum(CONVERSE_INTENTS),
+    service_code: z.string().nullable(),
+    location_query: z.string().nullable(),
+    question: z.string().nullable(),
+    language: z.string().nullable(),
+    reply: z.string().nullable(),
+  })
+  .strict();
+
 // Models sometimes omit nullable fields or run long; accept that rather than
 // dropping a good reply and falling back to the menu.
 const ConverseSchema = z.object({
@@ -155,6 +167,8 @@ export interface AnswerOptions {
   personal?: PersonalHints | null;
   /** Language to answer in, e.g. "Hausa". */
   language?: string;
+  /** Translated "Source" label and source note for the answer footer. */
+  labels?: { source: string; note: string };
 }
 
 export interface Assistant {
@@ -580,7 +594,8 @@ export function createAssistant(
     if (!modelName) return null;
     if (settings.apiKey) {
       openrouter ??= createOpenRouter({ apiKey: settings.apiKey });
-      resolvedModel = openrouter(modelName);
+      // Prefer the fastest provider for this model: SMS replies are waited on live.
+      resolvedModel = openrouter(modelName, { extraBody: { provider: { sort: 'throughput' } } });
       return resolvedModel;
     }
     if (injectedModelId && generateImpl) return injectedModelId;
@@ -616,6 +631,8 @@ export function createAssistant(
     name: string,
     system: string | null,
     prompt: string,
+    /** Strict shape sent to the model when the parse schema is lenient (OpenAI needs every field required). */
+    requestSchema: z.ZodType = schema,
   ): Promise<T | null> {
     if (!canGenerate() || !system) return null;
     const model = resolveModel();
@@ -627,7 +644,7 @@ export function createAssistant(
         model,
         system,
         prompt,
-        schema,
+        schema: requestSchema,
         maxOutputTokens: settings.aiMaxOutputTokens,
         abortSignal: controller.signal,
       }),
@@ -697,7 +714,13 @@ export function createAssistant(
       .filter((turn) => turn.text);
     const area = cleanText(savedAreaLabel, 80) || null;
     const prompt = `Recent conversation (oldest first):\n${JSON.stringify(turns)}\n\nLatest message:\n<<<\n${text}\n>>>\n\nSaved home area: ${JSON.stringify(area)}\n\nService codes and labels:\n${JSON.stringify(serviceList)}\n\nReply language: ${answerLanguage(language)}`;
-    const output = await generate(ConverseSchema, 'SmsConversation', PROMPTS.converse, prompt);
+    const output = await generate(
+      ConverseSchema,
+      'SmsConversation',
+      PROMPTS.converse,
+      prompt,
+      ConverseRequestSchema,
+    );
     if (!output) return null;
     const codes = new Set(serviceList.map((service) => service.service_code));
     const reply = redactLongNumbers(cleanText(output.reply ?? '', 320));
@@ -777,7 +800,7 @@ export function createAssistant(
     // Name the source site plainly and give one link; SMS space is precious.
     // Name the source in words: SMS answers never carry links.
     return {
-      text: `${answerText}\n\nSource: ${sourceName(new URL(cited[0]!).hostname)}. ${WEB_NOTE}`,
+      text: `${answerText}\n\n${options.labels?.source ?? 'Source'}: ${sourceName(new URL(cited[0]!).hostname)}. ${options.labels?.note ?? WEB_NOTE}`,
       sources,
       reviewedContentIds: [],
       kind: 'web_unreviewed',

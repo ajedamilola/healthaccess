@@ -668,3 +668,27 @@ test('long answers are trimmed at a sentence so they fit in an SMS', async () =>
   assert.match(fitted, /advice\.$/);
   assert.equal(fitForSms('Short answer.'), 'Short answer.');
 });
+
+test('web answers use the translated source label and note', async () => {
+  const generate = mockGenerate((request) =>
+    request.prompt.includes('Web sources:')
+      ? { output: { answer_text: 'Sha ruwa sosai kuma ka huta.', citations: ['https://www.who.int/news-room/fact-sheets/detail/malaria'] } }
+      : { output: null },
+  );
+  const assistant = createAssistant(assistantConfig({ openrouterModel: MODEL, allowLiveWeb: true }), {
+    repository: repository([]),
+    search: {
+      async searchHealth() {
+        return [{ title: 'Malaria', url: 'https://www.who.int/news-room/fact-sheets/detail/malaria', snippet: 'Malaria causes fever.' }];
+      },
+    },
+    model: MODEL,
+    generateImpl: generate,
+  });
+  const result = await assistant.answer('zazzabi', {
+    language: 'Hausa',
+    labels: { source: 'Tushe', note: 'Bayani na gaba daya ne.' },
+  });
+  assert.match(result.text, /Tushe: World Health Organization\. Bayani na gaba daya ne\.$/);
+  assert.match(generate.calls[0]!.prompt, /Answer language: Hausa/);
+});

@@ -72,7 +72,11 @@ interface SmsDependencies {
     }>;
     answer(
       question: string,
-      options?: { personal?: PersonalHints | null; language?: string },
+      options?: {
+        personal?: PersonalHints | null;
+        language?: string;
+        labels?: { source: string; note: string };
+      },
     ): Promise<{ text: string; kind?: string }>;
     /** False when no AI model is configured (deterministic menus only). */
     available?(): boolean;
@@ -192,6 +196,7 @@ export function createSmsEngine({
     const answer = await assistant.answer(question, {
       personal: await personalHints(),
       language: LANGUAGE_NAMES[locale],
+      labels: { source: say('source'), note: say('sourceNote') },
     });
     // Stay in the chat so a follow-up ("what if it gets worse?") keeps the thread.
     return result(assistant.converse ? 'chat' : 'idle', {}, [textReply(answer.text)]);
@@ -669,6 +674,7 @@ export function createSmsEngine({
           const answer = await assistant.answer(reply.question ?? text, {
             personal: await personalHints(),
             language: LANGUAGE_NAMES[locale],
+            labels: { source: say('source'), note: say('sourceNote') },
           });
           if ((answer as { kind?: string }).kind === 'fallback')
             return result('chat', {}, [
@@ -678,6 +684,8 @@ export function createSmsEngine({
         }
         if (reply.intent === 'my_code') return myCode();
         if (reply.reply) return result('chat', {}, [textReply(reply.reply)]);
+        // A reply we could not use mid-conversation: keep chatting, never the menu.
+        if (inChat) return result('chat', {}, [textReply(say('tryAgain'))]);
       } else if (assistant.available?.() !== false && (inChat || text.split(/\s+/).length >= 2)) {
         // The AI is configured but slow or failing. Do not show the numbered menu here:
         // the person's next reply ("4", "2 days") would be read as a menu choice.
