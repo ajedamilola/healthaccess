@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/arc/skeleton/skeleton";
 import { useFacility } from "@/api/hooks/directory";
 import { toApiError } from "@/api/errors";
 import type { FacilityDetail } from "@/api/schemas";
+import { ConnectionNotice } from "./ConnectionNotice";
 import { areaLabel, lastVerifiedLabel, sourceTrustLabel, sourceTrustTone } from "./format";
 import styles from "./care.module.css";
 
@@ -145,14 +146,23 @@ export function FacilityDetailView({ id }: { id: string }) {
   return (
     <div className={styles.page}>
       <BackLink />
+      <ConnectionNotice />
 
-      {facilityQuery.isPending ? <FacilityDetailSkeleton /> : null}
+      {facilityQuery.isPending ? (
+        <>
+          <h1 className={styles.title}>Facility details</h1>
+          <FacilityDetailSkeleton />
+        </>
+      ) : null}
 
       {facilityQuery.isError ? (
-        <FacilityDetailError
-          error={toApiError(facilityQuery.error)}
-          onRetry={() => void facilityQuery.refetch()}
-        />
+        <>
+          <h1 className={styles.title}>Facility details</h1>
+          <FacilityDetailError
+            error={toApiError(facilityQuery.error)}
+            onRetry={() => void facilityQuery.refetch()}
+          />
+        </>
       ) : null}
 
       {facilityQuery.isSuccess ? <FacilityContent facility={facilityQuery.data} /> : null}

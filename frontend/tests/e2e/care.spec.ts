@@ -6,7 +6,7 @@ function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 }
 
-async function mockDirectory(page: Page) {
+async function mockDirectory(page: Page, options: { emptyBelowRadius?: number } = {}) {
   await page.route(/\/api\/v1\/directory\/services$/, (route) => json(route, services));
 
   await page.route(/\/api\/v1\/directory\/areas(\?.*)?$/, (route) => {
@@ -30,6 +30,9 @@ async function mockDirectory(page: Page) {
     const service = url.searchParams.get("service");
     const radius = Number(url.searchParams.get("radius_km") ?? 25);
     const limit = Number(url.searchParams.get("limit") ?? 3);
+    if (options.emptyBelowRadius !== undefined && radius < options.emptyBelowRadius) {
+      return json(route, []);
+    }
     const matches = facilities
       .filter((facility) => facility.service_code === service && facility.distance_km <= radius)
       .sort((left, right) => left.distance_km - right.distance_km || left.name.localeCompare(right.name))
@@ -112,4 +115,34 @@ test.describe("care directory journey", () => {
       await page.screenshot({ path: `test-results/lane-c/facility-${width}.png`, fullPage: true });
     });
   }
+
+  test("the empty result widens the radius and never changes the URL", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 900 });
+    await mockDirectory(page, { emptyBelowRadius: 50 });
+
+    await page.goto("/find-care");
+    await searchGeneralCare(page);
+
+    await expect(
+      page.getByText(
+        "No listed facility offers this service within 25 km. Try a wider radius or another area.",
+      ),
+    ).toBeVisible();
+    await expect(page).toHaveURL(/\/find-care$/);
+    await expect(page.getByRole("heading", { level: 3 })).toHaveCount(1);
+
+    const emptyScan = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    expect(
+      seriousViolations(emptyScan.violations),
+      JSON.stringify(seriousViolations(emptyScan.violations), null, 2),
+    ).toEqual([]);
+
+    await page.getByRole("button", { name: "Search within 50 km" }).click();
+
+    await expect(page.getByRole("heading", { name: "Demo Community Hospital", level: 3 })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 3 })).toHaveCount(3);
+    await expect(page).toHaveURL(/\/find-care$/);
+  });
 });

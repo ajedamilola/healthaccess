@@ -8,6 +8,7 @@ import { Select } from "@/components/arc/select/select";
 import { useAreas, useServices } from "@/api/hooks/directory";
 import { toApiError } from "@/api/errors";
 import type { Area } from "@/api/schemas";
+import { ConnectionNotice } from "./ConnectionNotice";
 import { FacilityResults } from "./FacilityResults";
 import { useDebouncedValue } from "./useDebouncedValue";
 import { areaLabel } from "./format";
@@ -22,7 +23,9 @@ interface FieldErrors {
 
 interface CommittedSearch {
   service: string;
+  serviceLabel: string;
   areaId: string;
+  areaLabel: string;
   radius: number;
 }
 
@@ -88,8 +91,17 @@ export function FindCare() {
       return;
     }
 
+    const serviceLabel =
+      (servicesQuery.data ?? []).find((item) => item.service_code === service)?.label ?? service;
+
     setLimit(3);
-    setCommitted({ service, areaId, radius });
+    setCommitted({
+      service,
+      serviceLabel,
+      areaId,
+      areaLabel: selectedArea ? areaLabel(selectedArea) : "Chosen area",
+      radius,
+    });
   }
 
   function widenRadius(next: number) {
@@ -100,6 +112,7 @@ export function FindCare() {
 
   const servicesError = servicesQuery.isError ? toApiError(servicesQuery.error) : null;
   const areasError = areasQuery.isError ? toApiError(areasQuery.error) : null;
+  const servicesEmpty = servicesQuery.isSuccess && servicesQuery.data.length === 0;
 
   return (
     <div className={styles.page}>
@@ -109,6 +122,8 @@ export function FindCare() {
           Search the public directory by service and area. No account is needed, and nothing you type is saved.
         </p>
       </header>
+
+      <ConnectionNotice />
 
       <section className={styles.searchPanel} aria-labelledby="care-search-title">
         <h2 id="care-search-title" className={styles.sectionTitle}>
@@ -129,6 +144,17 @@ export function FindCare() {
           </div>
         ) : null}
 
+        {servicesEmpty ? (
+          <div className={styles.state}>
+            <Alert tone="info" title="No services are listed">
+              The directory has no active services right now. Try again in a moment.
+            </Alert>
+            <Button variant="secondary" size="sm" onClick={() => void servicesQuery.refetch()}>
+              Check again
+            </Button>
+          </div>
+        ) : null}
+
         <form className={styles.form} onSubmit={onSubmit} noValidate>
           <div className={styles.fieldGrid}>
             <div className={styles.field}>
@@ -145,7 +171,7 @@ export function FindCare() {
                   label: item.label,
                 }))}
                 placeholder={servicesQuery.isPending ? "Loading services…" : "Choose a service"}
-                disabled={servicesQuery.isPending || servicesQuery.isError}
+                disabled={servicesQuery.isPending || servicesQuery.isError || servicesEmpty}
                 description="Only services listed in the directory are shown."
               />
               {fieldErrors.service ? (
@@ -176,9 +202,9 @@ export function FindCare() {
               ) : null}
               {areasError ? (
                 <div className={styles.areaError}>
-                  <p className={styles.fieldError} role="alert">
+                  <Alert tone="danger" title="Could not search areas">
                     {areasError.message}
-                  </p>
+                  </Alert>
                   <Button variant="secondary" size="sm" onClick={() => void areasQuery.refetch()}>
                     Retry area search
                   </Button>
@@ -196,7 +222,7 @@ export function FindCare() {
             />
 
             <div className={styles.submitRow}>
-              <Button type="submit" size="lg">
+              <Button type="submit" size="lg" disabled={servicesEmpty}>
                 Search facilities
               </Button>
             </div>
@@ -215,7 +241,7 @@ export function FindCare() {
           </h2>
           {committed ? (
             <p className={styles.criteria}>
-              {areaLabel(selectedArea ?? { name: "Chosen area" })} · within {committed.radius} km
+              {committed.serviceLabel} · {committed.areaLabel} · within {committed.radius} km
             </p>
           ) : null}
         </div>
@@ -228,6 +254,7 @@ export function FindCare() {
             limit={limit}
             onShowMore={() => setLimit(10)}
             onWidenRadius={widenRadius}
+            onChangeArea={() => areaRef.current?.focus()}
           />
         ) : (
           <p className={styles.prompt}>Choose a service and an area to see listed facilities.</p>
