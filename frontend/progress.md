@@ -4,7 +4,7 @@
 Phase 2 (landing page) is done: dark v2, Murmur-style hero.
 Phase 3 is written: `scope.md` and `docs/BUILDER_PROMPT.md`, based on the live API snapshot in `docs/api/`.
 **M0 Foundation, M1 lanes and M2 integration are complete on `feat/m0-foundation`.**
-Final checks: typecheck, lint, build, 156 unit tests, 159 component tests, 28 mocked e2e tests and the live smoke are green.
+Final checks: typecheck, lint, build, 156 unit tests, 164 component tests, 28 mocked e2e tests and the live smoke are green.
 Next: reviewer checks step 2, then the branch can be merged.
 
 ## Completed
@@ -53,9 +53,9 @@ Completed on `feat/m0-foundation`:
   - medications manual create → mark taken → progress.
   - Auth, overview, record, care, practitioner, assistant, medications, channels and sharing screens also run axe at 390 and 1440; login and overview run at 390/768/1024/1440. No serious or critical violations.
 - **Security sweep:** `npm run security` checks 153 source files for storage, console and raw HTML use; only the landing intro flag and `src/lib/log.ts` are allowed exceptions. Cookies/storage evidence is in `test-results/security/evidence.png`; the grep output is in `test-results/security/grep.txt`.
-- **Performance:** the Lighthouse CLI could not launch Chrome in this environment (interstitial), so a Chromium mobile lab measurement at 390x844 is recorded as `test-results/lighthouse/playwright-metrics.json`: `/app` LCP 392 ms, CLS 0.034; `/find-care` LCP 148 ms, CLS 0. Both meet the LCP < 2.5 s and CLS < 0.1 targets. `npm run lighthouse` remains available when Chrome can launch.
+- **Performance:** `npm run lighthouse` against a production server on port 3212 reports mobile `/app` performance 85, LCP 1222 ms, CLS 0.035; `/find-care` performance 89, LCP 1217 ms, CLS 0.000. Both meet the LCP < 2.5 s and CLS < 0.1 targets. A Chromium lab fallback is also recorded in `test-results/lighthouse/playwright-metrics.json`.
 - **Screenshots:** `test-results/screens/{login,overview}-{390,768,1024,1440}.png`, plus lane A/B/C/E screenshots under `test-results/lane-*`.
-- **Final checks:** typecheck ✓, lint ✓, build ✓, unit 156/156, component 159/159, e2e 28/28, live smoke ✓ (login, refresh, session, `/me/fields`, directory services, logout; no AI, no writes).
+- **Final checks:** typecheck ✓, lint ✓, build ✓, unit 156/156, component 164/164, e2e 28/28, live smoke ✓ (login, refresh, session, `/me/fields`, directory services, logout; no AI, no writes).
 
 ## M0 foundation (2026-11-17)
 Completed on `feat/m0-foundation`:
@@ -115,7 +115,7 @@ Completed on `feat/m0-foundation`:
 ## Review log
 - **2026-11-20, M2 self-review:**
   - Overview cards load and fail independently; the overview e2e proves one failing card does not blank the others.
-  - The full e2e suite is green only when Playwright reuses an already-running production server. The earlier failures were `ERR_CONNECTION_REFUSED` after the environment killed the test server, not product failures. `reuseExistingServer` is now enabled outside CI.
+  - The full e2e suite is green (`28/28`). Earlier runs lost the test server to `ERR_CONNECTION_REFUSED` under parallel load; Playwright now runs one worker and reuses an existing production server outside CI, which keeps the run stable.
   - Vitest runs unit and component suites as separate commands because a single run exhausted the environment's time budget. `npm test` still covers both.
   - Lighthouse's bundled Chrome hit an interstitial in this environment. The Chromium lab fallback records LCP/CLS and both routes meet the targets; the Lighthouse script is committed for an environment where Chrome launches.
   - No new security deviation: tokens and codes stay out of storage, URLs, logs and the query cache; the security sweep passes.
