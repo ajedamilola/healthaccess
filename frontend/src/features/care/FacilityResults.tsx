@@ -19,6 +19,7 @@ export interface FacilityResultsProps {
   limit: number;
   onShowMore: () => void;
   onWidenRadius: (radius: number) => void;
+  onChangeArea: () => void;
 }
 
 function nextRadius(radius: number) {
@@ -32,6 +33,7 @@ export function FacilityResults({
   limit,
   onShowMore,
   onWidenRadius,
+  onChangeArea,
 }: FacilityResultsProps) {
   const facilitiesQuery = useFacilities({ service, areaId, radius, limit });
 
@@ -88,7 +90,11 @@ export function FacilityResults({
             <Button variant="secondary" onClick={() => onWidenRadius(widerRadius)}>
               Search within {widerRadius} km
             </Button>
-          ) : undefined
+          ) : (
+            <Button variant="secondary" onClick={onChangeArea}>
+              Change area
+            </Button>
+          )
         }
       />
     );

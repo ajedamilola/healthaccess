@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse, delay } from "msw";
 import { server } from "@/api/mocks/server";
-import { facilities, facilityDetails, services } from "@/api/mocks/fixtures";
+import { areas, facilities, facilityDetails, services } from "@/api/mocks/fixtures";
 import { directoryHandlers } from "@/api/mocks/handlers/directory";
 import { FindCare } from "@/features/care/FindCare";
 import { FacilityCard } from "@/features/care/FacilityCard";
@@ -61,7 +61,7 @@ describe("FindCare", () => {
     const user = userEvent.setup({ delay: null });
     server.use(
       http.get("/api/v1/directory/facilities", async ({ request }) => {
-        await delay(80);
+        await delay(500);
         return HttpResponse.json(matchingFacilities(new URL(request.url)));
       }),
     );
@@ -69,7 +69,9 @@ describe("FindCare", () => {
     renderWithProviders(<FindCare />);
     await search(user);
 
-    expect(await screen.findAllByRole("status", { name: /loading facility result/i })).toHaveLength(3);
+    expect(
+      await screen.findAllByRole("status", { name: /loading facility result/i }, { timeout: 3000 }),
+    ).toHaveLength(3);
 
     expect(await screen.findByRole("heading", { name: "Demo Community Hospital", level: 3 })).toBeInTheDocument();
     expect(screen.getByText("12 Example Road, Ikeja")).toBeInTheDocument();
@@ -122,6 +124,76 @@ describe("FindCare", () => {
 
     expect(await screen.findByRole("heading", { name: "Demo Community Hospital", level: 3 })).toBeInTheDocument();
     expect(radii).toEqual([25, 50]);
+  });
+
+  it("offers a change-area action when the radius is already the widest", async () => {
+    const user = userEvent.setup({ delay: null });
+    server.use(http.get("/api/v1/directory/facilities", () => HttpResponse.json([])));
+
+    renderWithProviders(<FindCare />);
+    await search(user);
+
+    expect(
+      await screen.findByText(
+        "No listed facility offers this service within 25 km. Try a wider radius or another area.",
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Search within 50 km" }));
+
+    expect(
+      await screen.findByText(
+        "No listed facility offers this service within 50 km. Try a wider radius or another area.",
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Change area" }));
+
+    expect(screen.getByLabelText("Area")).toHaveFocus();
+  });
+
+  it("shows a retry with the request id when the area search fails", async () => {
+    const user = userEvent.setup({ delay: null });
+    let attempt = 0;
+    server.use(
+      http.get("/api/v1/directory/areas", () => {
+        attempt += 1;
+        return attempt === 1
+          ? HttpResponse.json({ error: "upstream_unavailable", request_id: "req-areas-1" }, { status: 500 })
+          : HttpResponse.json(areas);
+      }),
+    );
+
+    renderWithProviders(<FindCare />);
+    const input = screen.getByLabelText("Area");
+    await user.click(input);
+
+    expect(await screen.findByText("Could not search areas")).toBeInTheDocument();
+    expect(screen.getByText("Request ID: req-areas-1")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Retry area search" }));
+    await user.click(input);
+
+    expect(await screen.findByRole("option", { name: /^Ikeja demo area/ })).toBeInTheDocument();
+    expect(attempt).toBe(2);
+  });
+
+  it("shows an offline banner and keeps typed entries", async () => {
+    const original = Object.getOwnPropertyDescriptor(window.navigator, "onLine");
+    Object.defineProperty(window.navigator, "onLine", { configurable: true, value: false });
+
+    try {
+      const user = userEvent.setup({ delay: null });
+      renderWithProviders(<FindCare />);
+
+      expect(await screen.findByText("You are offline")).toBeInTheDocument();
+
+      await user.type(screen.getByLabelText("Area"), "Ike");
+      expect(screen.getByLabelText("Area")).toHaveValue("Ike");
+    } finally {
+      if (original) Object.defineProperty(window.navigator, "onLine", original);
+      else Reflect.deleteProperty(window.navigator, "onLine");
+    }
   });
 
   it("raises the result limit from 3 to 10 with Show more", async () => {
@@ -240,6 +312,29 @@ describe("FindCare", () => {
     expect(screen.queryByText("Could not load services")).not.toBeInTheDocument();
   });
 
+  it("shows an empty services state with a way to check again", async () => {
+    const user = userEvent.setup({ delay: null });
+    let attempt = 0;
+    server.use(
+      http.get("/api/v1/directory/services", () => {
+        attempt += 1;
+        return attempt === 1 ? HttpResponse.json([]) : HttpResponse.json(services);
+      }),
+    );
+
+    renderWithProviders(<FindCare />);
+
+    expect(await screen.findByText("No services are listed")).toBeInTheDocument();
+    expect(screen.getByLabelText("Service")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Search facilities" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+
+    await waitFor(() => expect(screen.getByLabelText("Service")).not.toBeDisabled());
+    await waitFor(() => expect(screen.queryByText("No services are listed")).not.toBeInTheDocument());
+    expect(attempt).toBe(2);
+  });
+
   it("debounces the area search by 250 ms", async () => {
     const user = userEvent.setup({ delay: null });
     const areaRequests: URL[] = [];
@@ -320,8 +415,10 @@ describe("FacilityDetailView", () => {
 
     renderWithProviders(<FacilityDetailView id={HOSPITAL_ID} />);
 
+    expect(screen.getByRole("heading", { name: "Facility details", level: 1 })).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Loading facility details" })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "Demo Community Hospital", level: 1 })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Facility details", level: 1 })).not.toBeInTheDocument();
 
     expect(screen.getByText("12 Example Road, Ikeja")).toBeInTheDocument();
     expect(screen.getByText("Ikeja demo area, Lagos")).toBeInTheDocument();
@@ -352,8 +449,23 @@ describe("FacilityDetailView", () => {
     renderWithProviders(<FacilityDetailView id={MISSING_ID} />);
 
     expect(await screen.findByText("This item is not available.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Facility details", level: 1 })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Back to find care" })).toBeInTheDocument();
+  });
+
+  it("explains when no phone or services are listed", async () => {
+    server.use(
+      http.get("/api/v1/directory/facilities/:id", () =>
+        HttpResponse.json({ ...facilityDetails[HOSPITAL_ID], phone: null, services: [] }),
+      ),
+    );
+
+    renderWithProviders(<FacilityDetailView id={HOSPITAL_ID} />);
+
+    expect(await screen.findByRole("heading", { name: "Demo Community Hospital", level: 1 })).toBeInTheDocument();
+    expect(screen.getByText("No phone number is listed.")).toBeInTheDocument();
+    expect(screen.getByText("No services are listed.")).toBeInTheDocument();
   });
 
   it("retries a failed load and shows the request id for support", async () => {

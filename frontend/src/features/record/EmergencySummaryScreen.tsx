@@ -13,7 +13,7 @@ import { ShieldAlert } from "lucide-react";
 import { toApiError } from "@/api/errors";
 import { useEmergencySummary, useFields, useUpdateEmergencyFields } from "@/api/hooks/record";
 import type { FieldDefinition } from "@/api/schemas";
-import { readableServerValue } from "./helpers";
+import { isUpstreamTimeout, readableServerValue } from "./helpers";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { OfflineBanner } from "./OfflineBanner";
 import { FormError, LoadError, PageIntro, StatusLine } from "./States";
@@ -106,6 +106,12 @@ export function EmergencySummaryScreen() {
       );
     } catch (error) {
       const apiError = toApiError(error);
+      if (isUpstreamTimeout(error)) {
+        // The write may have landed. Refresh the selection and the preview before offering a retry.
+        await Promise.all([fieldsQuery.refetch(), summaryQuery.refetch()]);
+        setFormError(error);
+        return;
+      }
       if (apiError.code === "version_conflict") {
         const [fieldsResult, summaryResult] = await Promise.all([fieldsQuery.refetch(), summaryQuery.refetch()]);
         if (fieldsResult.data && summaryResult.data) {

@@ -96,6 +96,11 @@ export function isVersionConflict(error: unknown): boolean {
   return toApiError(error).code === "version_conflict";
 }
 
+/** A timed-out mutation may still have been applied, so callers refetch before offering a retry. */
+export function isUpstreamTimeout(error: unknown): boolean {
+  return toApiError(error).code === "upstream_timeout";
+}
+
 export function isDenied(error: unknown): boolean {
   const apiError = toApiError(error);
   return apiError instanceof ApiError && apiError.denied;

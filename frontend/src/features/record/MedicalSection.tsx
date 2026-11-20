@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
+import { useQueryClient } from "@tanstack/react-query";
 import { Activity, HeartPulse } from "lucide-react";
 import { Badge } from "@/components/arc/badge/badge";
 import { Button } from "@/components/arc/button/button";
@@ -15,8 +16,9 @@ import {
   usePatchMedicalEvent,
   usePutMedical,
 } from "@/api/hooks/record";
+import { qk } from "@/api/keys";
 import type { Allergy, MedicalEvent, MeResponse, PutMedicalBody } from "@/api/schemas";
-import { formatIsoDate, issueMessages, readableServerValue } from "./helpers";
+import { formatIsoDate, isUpstreamTimeout, issueMessages, readableServerValue } from "./helpers";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { FormError, StatusLine } from "./States";
 import styles from "./record.module.css";
@@ -68,6 +70,7 @@ function severityTone(severity: string | null | undefined) {
 }
 
 export function MedicalSection({ me }: { me: MeResponse }) {
+  const queryClient = useQueryClient();
   const putMedical = usePutMedical();
   const deleteAllergy = useDeleteAllergy();
   const patchEvent = usePatchMedicalEvent();
@@ -99,6 +102,12 @@ export function MedicalSection({ me }: { me: MeResponse }) {
     setErrors({});
   }
 
+  /** A timed-out write may have landed, so read the current medical details before showing a retry. */
+  async function refreshAfterTimeout(error: unknown) {
+    if (!isUpstreamTimeout(error)) return;
+    await queryClient.refetchQueries({ queryKey: qk.me });
+  }
+
   function openDialog(next: Exclude<DialogState, null>) {
     clearFeedback();
     setFailedAction(null);
@@ -128,6 +137,7 @@ export function MedicalSection({ me }: { me: MeResponse }) {
       setStatus(message);
       return true;
     } catch (error) {
+      await refreshAfterTimeout(error);
       setFormError(error);
       const messages = issueMessages(error, ["name", "severity", "diagnosisDate", "recoveryTime", "occurredOn", "description"]);
       if (Object.keys(messages).length) setErrors(messages);
@@ -224,6 +234,7 @@ export function MedicalSection({ me }: { me: MeResponse }) {
       setEditingId(null);
       setStatus("Medical event updated.");
     } catch (error) {
+      await refreshAfterTimeout(error);
       setFormError(error);
       const messages = issueMessages(error, ["name", "occurredOn", "recoveryTime", "description"]);
       if (Object.keys(messages).length) setErrors(messages);
@@ -250,6 +261,7 @@ export function MedicalSection({ me }: { me: MeResponse }) {
       }
       setDialog(null);
     } catch (error) {
+      await refreshAfterTimeout(error);
       setDialog(null);
       setFailedAction(action);
       setFormError(error);

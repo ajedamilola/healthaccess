@@ -18,6 +18,7 @@ import {
   changedKeys,
   conflictChanges,
   draftFor,
+  isUpstreamTimeout,
   isVersionConflict,
   issueMessages,
   valueForDraft,
@@ -81,6 +82,12 @@ export function RecordScreen() {
       setConflict(null);
     } catch (error) {
       const apiError = toApiError(error);
+      if (isUpstreamTimeout(error)) {
+        // The write may have landed. Read the current values before showing a retry.
+        await fieldsQuery.refetch();
+        setFormError(error);
+        return;
+      }
       if (isVersionConflict(error)) {
         const refreshed = await fieldsQuery.refetch();
         if (refreshed.data) {

@@ -237,4 +237,33 @@ describe("RecordScreen", () => {
     expect(await screen.findByText("Record saved.")).toBeInTheDocument();
     expect(puts).toBe(2);
   });
+
+  it("refetches the record before offering a retry after a timeout", async () => {
+    const user = userEvent.setup();
+    let gets = 0;
+    server.use(
+      http.get("/api/v1/me/fields", () => {
+        gets += 1;
+        return HttpResponse.json(fieldsResponse);
+      }),
+      http.put("/api/v1/me/fields", () =>
+        HttpResponse.json(
+          { error: "upstream_timeout", message: "The save timed out", request_id: "req-timeout" },
+          { status: 504 },
+        ),
+      ),
+    );
+
+    renderWithProviders(<RecordScreen />);
+    const name = await screen.findByLabelText("Name");
+    await user.clear(name);
+    await user.type(name, "Ada Okafor");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(await screen.findByText("This took too long.")).toBeInTheDocument();
+    expect(gets).toBeGreaterThanOrEqual(2);
+    expect(screen.getByLabelText("Name")).toHaveValue("Ada Okafor");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.queryByText("Record saved.")).not.toBeInTheDocument();
+  });
 });
