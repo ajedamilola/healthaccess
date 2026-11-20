@@ -1,19 +1,23 @@
 "use client";
 
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Alert } from "@/components/arc/alert/alert";
 import { Avatar } from "@/components/arc/avatar/avatar";
 import { Button } from "@/components/arc/button/button";
 import { FileDropzone } from "@/components/arc/file-dropzone/file-dropzone";
 import { toApiError } from "@/api/errors";
 import { useUploadAvatar } from "@/api/hooks/record";
+import { qk } from "@/api/keys";
 import type { MeResponse } from "@/api/schemas";
+import { isUpstreamTimeout } from "./helpers";
 import { FormError, RequestId, StatusLine } from "./States";
 import styles from "./record.module.css";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 
 export function AvatarSection({ me }: { me: MeResponse }) {
+  const queryClient = useQueryClient();
   const upload = useUploadAvatar();
   const [file, setFile] = useState<File | null>(null);
   const [formError, setFormError] = useState<unknown>(null);
@@ -52,6 +56,12 @@ export function AvatarSection({ me }: { me: MeResponse }) {
       setStatus("Profile photo updated.");
     } catch (error) {
       const apiError = toApiError(error);
+      if (isUpstreamTimeout(error)) {
+        // The upload may have landed. Read the current profile before showing a retry.
+        await queryClient.refetchQueries({ queryKey: qk.me });
+        setFormError(error);
+        return;
+      }
       if (apiError.code === "storage_unavailable") {
         setStorageError("File storage is unavailable right now. Other profile changes still work.");
         setStorageRequestId(apiError.requestId);

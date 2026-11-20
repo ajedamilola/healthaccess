@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { Alert } from "@/components/arc/alert/alert";
 import { Button } from "@/components/arc/button/button";
@@ -8,8 +9,9 @@ import { Input } from "@/components/arc/input/input";
 import { PasswordField } from "@/components/arc/password-field/password-field";
 import { toApiError } from "@/api/errors";
 import { useUpdateMe } from "@/api/hooks/record";
+import { qk } from "@/api/keys";
 import type { MeResponse, PatchMeBody } from "@/api/schemas";
-import { issueMessages, todayIso } from "./helpers";
+import { isUpstreamTimeout, issueMessages, todayIso } from "./helpers";
 import { FormError, StatusLine } from "./States";
 import styles from "./record.module.css";
 
@@ -92,6 +94,7 @@ function initialFor(me: MeResponse, knownPhone: string): Initial {
 
 export function AccountSection({ me }: { me: MeResponse }) {
   const updateMe = useUpdateMe();
+  const queryClient = useQueryClient();
   const [knownPhone, setKnownPhone] = useState("");
   const initial = initialFor(me, knownPhone);
   const [form, setForm] = useState<FormState>({
@@ -169,6 +172,12 @@ export function AccountSection({ me }: { me: MeResponse }) {
       );
     } catch (error) {
       const apiError = toApiError(error);
+      if (isUpstreamTimeout(error)) {
+        // The write may have landed. Read the current account before showing a retry.
+        await queryClient.refetchQueries({ queryKey: qk.me });
+        setFormError(error);
+        return;
+      }
       if (apiError.code === "email_taken") {
         setErrors({ email: "This email is already registered." });
         document.getElementById("profile-email")?.focus();
