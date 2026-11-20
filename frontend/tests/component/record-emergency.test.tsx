@@ -292,4 +292,32 @@ describe("EmergencySummaryScreen", () => {
     expect(await screen.findByText(/Emergency summary updated/)).toBeInTheDocument();
     expect(puts).toBe(2);
   });
+
+  it("refetches the selection before offering a retry after a timeout", async () => {
+    const user = userEvent.setup();
+    let gets = 0;
+    server.use(
+      http.get("/api/v1/me/fields", () => {
+        gets += 1;
+        return HttpResponse.json(fieldsResponse);
+      }),
+      http.put("/api/v1/me/emergency-fields", () =>
+        HttpResponse.json(
+          { error: "upstream_timeout", message: "The save timed out", request_id: "req-timeout" },
+          { status: 504 },
+        ),
+      ),
+    );
+
+    renderWithProviders(<EmergencySummaryScreen />);
+    const allergies = await screen.findByRole("checkbox", { name: "Allergies" });
+    await user.click(allergies);
+    await user.click(screen.getByRole("button", { name: "Save emergency summary" }));
+
+    expect(await screen.findByText("This took too long.")).toBeInTheDocument();
+    expect(gets).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole("checkbox", { name: "Allergies" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.queryByText(/Emergency summary updated/)).not.toBeInTheDocument();
+  });
 });
