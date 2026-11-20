@@ -8,12 +8,14 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
-    "test": "vitest run",
-    "test:unit": "vitest run",
+    "test": "vitest run tests/unit && vitest run tests/component",
+    "test:unit": "vitest run tests/unit",
+    "test:component": "vitest run tests/component",
     "test:e2e": "playwright test",
     "test:live": "node tests/live/smoke.mjs",
     "test:coverage": "vitest run --coverage",
     "lighthouse": "node scripts/lighthouse.mjs",
+    "perf": "node scripts/perf-metrics.mjs",
     "security": "node scripts/security-sweep.mjs"
   },
   "dependencies": {
