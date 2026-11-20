@@ -413,9 +413,10 @@ test('answer returns a clearly labelled web-only result when reviewed evidence i
   assert.equal(result.kind, 'web_unreviewed');
   assert.deepEqual(result.reviewedContentIds, []);
   assert.equal(result.sources.length, 2);
-  assert.match(result.text, /^AI-assisted web information, not clinically reviewed\./);
-  assert.match(result.text, /www\.who\.int/);
-  assert.match(result.text, /https:\/\/www\.who\.int\/news-room\/fact-sheets\/detail\/fever/);
+  assert.match(result.text, /General information from the web, not a diagnosis/);
+  assert.match(result.text, /Source: World Health Organization\./);
+  // SMS answers never carry links.
+  assert.doesNotMatch(result.text, /https?:|www\.|who\.int/);
   assert.doesNotMatch(result.text, /verified/i);
   assert.equal(sourceCalls.length, 1);
   assert.equal(sourceCalls[0], 'what is fever?');
@@ -578,4 +579,116 @@ test('createAssistant validates configuration bounds', () => {
     () => createAssistant(assistantConfig({ aiMaxOutputTokens: 5000 })),
     /aiMaxOutputTokens/,
   );
+});
+
+test('answer sends cleaned personal hints to the model but never to web search', async () => {
+  const searchQueries: string[] = [];
+  const search: AssistantSearch = {
+    async searchHealth(query: string): Promise<Source[]> {
+      searchQueries.push(query);
+      return [];
+    },
+  };
+  const generate = mockGenerate(() => ({
+    output: { answer_text: 'Rest and fluids are commonly advised.', citations: ['content-1'] },
+  }));
+  const assistant = createAssistant(assistantConfig({ openrouterModel: MODEL }), {
+    repository: repository([reviewedRow()]),
+    search,
+    model: MODEL,
+    generateImpl: generate,
+  });
+  const result = await assistant.answer('what helps a fever', {
+    personal: {
+      ageBand: 'adult under 40',
+      sex: 'Female',
+      pregnancy: 'Pregnant',
+      conditions: ['Asthma', 'call 08012345678'],
+      allergies: ['Penicillin'],
+      medications: [],
+      language: 'en',
+    },
+  });
+  assert.equal(result.kind, 'reviewed');
+  const prompt = generate.calls[0]!.prompt;
+  assert.match(prompt, /Person context/);
+  assert.match(prompt, /Pregnant/);
+  assert.match(prompt, /Asthma/);
+  assert.doesNotMatch(prompt, /08012345678/);
+  assert.deepEqual(searchQueries, []);
+});
+
+test('answer omits the person context block when no hints are supplied', async () => {
+  const generate = mockGenerate(() => ({
+    output: { answer_text: 'Rest and fluids are commonly advised.', citations: ['content-1'] },
+  }));
+  const assistant = createAssistant(assistantConfig({ openrouterModel: MODEL }), {
+    repository: repository([reviewedRow()]),
+    model: MODEL,
+    generateImpl: generate,
+  });
+  await assistant.answer('what helps a fever', { personal: null });
+  assert.doesNotMatch(generate.calls[0]!.prompt, /Person context/);
+});
+
+test('converse sends short number-only replies and prior turns to the model', async () => {
+  const generate = mockGenerate(() => ({
+    output: { intent: 'clarification', service_code: null, location_query: null, question: null, reply: 'Has it lasted more than 2 days?' },
+  }));
+  const assistant = createAssistant(assistantConfig({ openrouterModel: MODEL }), { model: MODEL, generateImpl: generate });
+  const result = await assistant.converse!('2', {
+    history: [
+      { role: 'user', text: 'my child has a fever' },
+      { role: 'assistant', text: 'How old is your child?' },
+    ],
+  });
+  assert.equal(result?.reply, 'Has it lasted more than 2 days?');
+  assert.equal(generate.calls.length, 1);
+  assert.match(generate.calls[0]!.prompt, /my child has a fever/);
+  assert.match(generate.calls[0]!.prompt, /How old is your child\?/);
+  assert.match(generate.calls[0]!.prompt, /<<<\n2\n>>>/);
+  // Long numbers are still kept away from the model.
+  await assistant.converse!('call me on 08031234567', {});
+  assert.doesNotMatch(generate.calls[1]!.prompt, /08031234567/);
+});
+
+test('converse tolerates a model that omits optional fields', async () => {
+  const generate = mockGenerate(() => ({ output: { intent: 'smalltalk', reply: 'Hello! How can I help?' } }));
+  const assistant = createAssistant(assistantConfig({ openrouterModel: MODEL }), { model: MODEL, generateImpl: generate });
+  const result = await assistant.converse!('hi there', {});
+  assert.equal(result?.reply, 'Hello! How can I help?');
+  assert.equal(result?.location_query, null);
+});
+
+test('long answers are trimmed at a sentence so they fit in an SMS', async () => {
+  const { fitForSms } = await import('../src/services/assistant.js');
+  const long = Array.from({ length: 30 }, (_, i) => `Sentence number ${i} gives general advice.`).join(' ');
+  const fitted = fitForSms(long);
+  assert.ok(fitted.length <= 420);
+  assert.match(fitted, /advice\.$/);
+  assert.equal(fitForSms('Short answer.'), 'Short answer.');
+});
+
+test('web answers use the translated source label and note', async () => {
+  const generate = mockGenerate((request) =>
+    request.prompt.includes('Web sources:')
+      ? { output: { answer_text: 'Sha ruwa sosai kuma ka huta.', citations: ['https://www.who.int/news-room/fact-sheets/detail/malaria'] } }
+      : { output: null },
+  );
+  const assistant = createAssistant(assistantConfig({ openrouterModel: MODEL, allowLiveWeb: true }), {
+    repository: repository([]),
+    search: {
+      async searchHealth() {
+        return [{ title: 'Malaria', url: 'https://www.who.int/news-room/fact-sheets/detail/malaria', snippet: 'Malaria causes fever.' }];
+      },
+    },
+    model: MODEL,
+    generateImpl: generate,
+  });
+  const result = await assistant.answer('zazzabi', {
+    language: 'Hausa',
+    labels: { source: 'Tushe', note: 'Bayani na gaba daya ne.' },
+  });
+  assert.match(result.text, /Tushe: World Health Organization\. Bayani na gaba daya ne\.$/);
+  assert.match(generate.calls[0]!.prompt, /Answer language: Hausa/);
 });

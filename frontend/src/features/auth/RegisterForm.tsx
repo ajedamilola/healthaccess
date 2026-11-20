@@ -67,7 +67,8 @@ export function RegisterForm({ nextPath }: { nextPath: string }) {
     setErrors({});
     try {
       await register.mutateAsync(parsed.data);
-      router.replace(nextPath);
+      // Offer the optional setup wizard first; it can be skipped and then continues to nextPath.
+      router.replace(`/app/welcome?next=${encodeURIComponent(nextPath)}`);
       router.refresh();
     } catch (error) {
       const apiError = toApiError(error);

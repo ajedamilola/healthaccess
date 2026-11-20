@@ -97,6 +97,9 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
             {errors.password}
           </p>
         ) : null}
+        <p className={styles.switch}>
+          <Link href="/forgot-password">Forgot your password?</Link>
+        </p>
 
         <Button type="submit" size="lg" loading={login.isPending} className={styles.submit}>
           Sign in

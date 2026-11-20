@@ -62,6 +62,6 @@ describe("RegisterForm", () => {
     await user.click(screen.getByRole("button", { name: "Create account" }));
 
     expect(await screen.findByRole("button", { name: "Create account" })).toHaveAttribute("aria-busy", "true");
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/app"));
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/app/welcome?next=%2Fapp"));
   });
 });

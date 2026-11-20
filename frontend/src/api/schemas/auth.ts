@@ -65,6 +65,21 @@ export const loginBodySchema = z.object({
 
 export type LoginBody = z.infer<typeof loginBodySchema>;
 
+export const forgotPasswordBodySchema = z.object({
+  email: z.string().trim().email().max(320),
+});
+
+export const resetPasswordBodySchema = z
+  .object({
+    token: z.string().min(40).max(128),
+    password: z.string().min(8).max(128),
+    password_confirmation: z.string().min(8).max(128),
+  })
+  .refine((value) => value.password === value.password_confirmation, {
+    path: ["password_confirmation"],
+    message: "Passwords do not match",
+  });
+
 export const registerBodySchema = z
   .object({
     firstName: z.string().min(1).max(100),

@@ -250,6 +250,7 @@ export async function findFacilities(
   const facilities = await prisma.facility.findMany({
     where: {
       status: 'APPROVED',
+      is_demo: false,
       area: { active: true, country_code: area.country_code },
       facility_services: {
         some: {

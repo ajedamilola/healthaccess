@@ -1,43 +1,35 @@
 "use client";
 
+import { useState, type FormEvent } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { History, SlidersHorizontal, Trash2 } from "lucide-react";
 import { Alert } from "@/components/arc/alert/alert";
 import { Badge } from "@/components/arc/badge/badge";
 import { Button } from "@/components/arc/button/button";
-import { ChatComposer, type ChatDraft } from "@/components/arc/chat-thread/chat-thread";
 import { Dialog, DialogContent } from "@/components/arc/dialog/dialog";
 import { Input } from "@/components/arc/input/input";
 import SegmentedControl from "@/components/arc/segmented-control/segmented-control";
 import { Skeleton } from "@/components/arc/skeleton/skeleton";
-import { Textarea } from "@/components/arc/textarea/textarea";
 import { ApiError, toApiError } from "@/api/errors";
-import { useDeleteSymptom, useSymptom, useSymptomFollowUp, useUpdateSymptom } from "@/api/hooks/symptom";
-import { useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, type FormEvent } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { AssistantMessage } from "./AssistantMessage";
-import { AssistantSafetyNote } from "./SafetyNote";
-import { formatDateTime, normaliseSeverity, severityLabel, severityTone, type Severity } from "./format";
-import styles from "./assistant.module.css";
-
-const MAX_MESSAGE = 8000;
-
-type Phase = "idle" | "pending" | "error" | "cancelled";
-
-function retryable(error: ApiError) {
-  return ["ai_unavailable", "ai_invalid_response", "upstream_timeout", "upstream_unavailable", "network", "invalid_response", "timeout"].includes(
-    error.code,
-  );
-}
+import { useSession } from "@/api/hooks/session";
+import { useDeleteSymptom, useSymptom, useUpdateSymptom } from "@/api/hooks/symptom";
+import { ChatInput, ChatMessages, ConversationSidebar, StreamError } from "./ChatParts";
+import { normaliseSeverity, severityLabel, severityTone, type Severity } from "./format";
+import { useAssistantStream } from "./useAssistantStream";
+import styles from "./chat.module.css";
+import base from "./assistant.module.css";
 
 export function AssistantThread({ id }: { id: string }) {
   const router = useRouter();
-  const queryClient = useQueryClient();
+  const session = useSession();
   const detail = useSymptom(id);
-  const followUp = useSymptomFollowUp(id);
   const update = useUpdateSymptom(id);
   const remove = useDeleteSymptom(id);
+  const stream = useAssistantStream();
 
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
   const [titleError, setTitleError] = useState<string | null>(null);
   const [severityDraft, setSeverityDraft] = useState<Severity | null>(null);
@@ -45,21 +37,18 @@ export function AssistantThread({ id }: { id: string }) {
   const [editError, setEditError] = useState<ApiError | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [pendingMessage, setPendingMessage] = useState("");
-  const [lastMessage, setLastMessage] = useState("");
-  const [error, setError] = useState<ApiError | null>(null);
-  const [tooLongDraft, setTooLongDraft] = useState<string | null>(null);
-  const busy = useRef(false);
-  const controller = useRef<AbortController | null>(null);
-
   const symptom = detail.data?.symptom;
   const messages = detail.data?.messages ?? [];
   const errorState = detail.error ? toApiError(detail.error) : null;
-  const denied = errorState?.status === 403;
-  const missing = errorState?.status === 404;
   const title = titleDraft ?? symptom?.name ?? "";
   const severity = severityDraft ?? normaliseSeverity(symptom?.severity) ?? "";
+  const initial = (session.data?.account?.display_name ?? "").trim().charAt(0).toUpperCase();
+  const streaming = stream.phase === "streaming";
+  const lastHuman = [...messages].reverse().find((message) => message.type === "Human");
+  const savedLastAttempt =
+    stream.lastRequest?.mode === "followup" &&
+    Boolean(lastHuman) &&
+    lastHuman?.content.trim() === stream.lastRequest.message.trim();
 
   async function saveTitle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -101,53 +90,6 @@ export function AssistantThread({ id }: { id: string }) {
     );
   }
 
-  async function submitFollowUp(message: string) {
-    if (busy.current) return;
-    const trimmed = message.trim();
-    if (!trimmed || trimmed.length > MAX_MESSAGE) return;
-    busy.current = true;
-    setError(null);
-    setPendingMessage(trimmed);
-    setLastMessage(trimmed);
-    setPhase("pending");
-
-    const abort = new AbortController();
-    controller.current = abort;
-    try {
-      await followUp.mutateAsync({ message: trimmed, files: [], signal: abort.signal });
-      setPhase("idle");
-      setPendingMessage("");
-      setStatus("Reply received.");
-    } catch (caught) {
-      if (abort.signal.aborted) {
-        setPhase("cancelled");
-        setPendingMessage("");
-        queryClient.invalidateQueries({ queryKey: ["symptom", id] });
-        queryClient.invalidateQueries({ queryKey: ["symptoms"] });
-      } else {
-        const failure = toApiError(caught);
-        // A timed-out follow-up may still have been saved: refresh the thread before the user retries.
-        if (failure.code === "upstream_timeout") void queryClient.invalidateQueries({ queryKey: ["symptom", id] });
-        setError(failure);
-        setPhase("error");
-      }
-    } finally {
-      busy.current = false;
-      controller.current = null;
-    }
-  }
-
-  function handleSend(draft: ChatDraft) {
-    if (busy.current) return;
-    const message = draft.text.trim();
-    if (message.length > MAX_MESSAGE) {
-      setTooLongDraft(draft.text);
-      setError(null);
-      return;
-    }
-    void submitFollowUp(message);
-  }
-
   async function confirmDelete() {
     setEditError(null);
     try {
@@ -158,21 +100,56 @@ export function AssistantThread({ id }: { id: string }) {
     }
   }
 
+  const header = (
+    <header className={styles.chatHeader}>
+      <button
+        type="button"
+        className={`${styles.iconButton} ${styles.menuToggle}`}
+        aria-label="Show conversations"
+        onClick={() => setSidebarOpen(true)}
+      >
+        <History size={18} />
+      </button>
+      <h1 className={styles.chatTitle}>{symptom?.name || "Conversation"}</h1>
+      {symptom ? (
+        <>
+          <Badge tone={severityTone(symptom.severity)} dot>
+            {severityLabel(symptom.severity)}
+          </Badge>
+          <button
+            type="button"
+            className={styles.iconButton}
+            aria-label="Conversation details"
+            aria-expanded={detailsOpen}
+            onClick={() => setDetailsOpen((value) => !value)}
+          >
+            <SlidersHorizontal size={18} />
+          </button>
+          <button
+            type="button"
+            className={styles.iconButton}
+            aria-label="Delete conversation"
+            onClick={() => setDeleteOpen(true)}
+          >
+            <Trash2 size={18} />
+          </button>
+        </>
+      ) : null}
+    </header>
+  );
+
+  let body: React.ReactNode;
   if (detail.isLoading) {
-    return (
-      <div className={styles.page}>
-        <h1 className={styles.title}>Conversation</h1>
-        <div className={styles.skeletonWrap}>
-          <Skeleton lines={6} label="Loading conversation" />
-        </div>
+    body = (
+      <div className={styles.scroller}>
+        <Skeleton lines={6} label="Loading conversation" />
       </div>
     );
-  }
-
-  if (errorState || !detail.data) {
-    return (
-      <div className={styles.page}>
-        <h1 className={styles.title}>Conversation</h1>
+  } else if (errorState || !detail.data) {
+    const denied = errorState?.status === 403;
+    const missing = errorState?.status === 404;
+    body = (
+      <div className={styles.scroller}>
         <Alert
           tone={denied || missing ? "warning" : "danger"}
           title={
@@ -188,242 +165,136 @@ export function AssistantThread({ id }: { id: string }) {
             : missing
               ? "It may have been deleted, or it does not exist."
               : errorState?.message}
-          {errorState?.requestId ? <span className={styles.requestId}>Request {errorState.requestId}</span> : null}
+          {errorState?.requestId ? <span className={base.requestId}>Request {errorState.requestId}</span> : null}
+          <span className={styles.inlineActions}>
+            <Link href="/app/assistant">Start a new chat</Link>
+            {!denied && !missing ? (
+              <Button variant="secondary" size="sm" onClick={() => void detail.refetch()}>
+                Try again
+              </Button>
+            ) : null}
+          </span>
         </Alert>
-        <div className={styles.stateActions}>
-          <Link className={styles.hint} href="/app/assistant">
-            Back to assistant
-          </Link>
-          {!denied && !missing && errorState ? (
-            <Button variant="secondary" size="sm" onClick={() => void detail.refetch()}>
-              Try again
-            </Button>
-          ) : null}
-        </div>
       </div>
     );
-  }
-
-  const showSevere = normaliseSeverity(symptom?.severity) === "SEVERE";
-
-  return (
-    <div className={styles.page}>
-      <div>
-        <Link className={styles.hint} href="/app/assistant">
-          Back to assistant
-        </Link>
-      </div>
-
-      <header className={styles.threadHeader}>
-        <div className={styles.threadTop}>
-          <div className={styles.threadHeading}>
-            <h1 className={styles.threadTitle}>{symptom?.name || "Untitled conversation"}</h1>
-            <div className={styles.threadMeta}>
-              <Badge tone={severityTone(symptom?.severity)} dot>
-                {severityLabel(symptom?.severity)}
-              </Badge>
-              <span>Started {formatDateTime(symptom?.created_at ?? "")}</span>
-            </div>
-          </div>
-          <Button variant="danger" size="sm" onClick={() => setDeleteOpen(true)}>
-            Delete conversation
-          </Button>
-        </div>
-
-        <section className={styles.editGrid} aria-labelledby="conversation-details-title">
-          <h2 id="conversation-details-title" className={styles.editLabel}>
-            Conversation details
-          </h2>
-          <form className={styles.editRow} onSubmit={saveTitle} noValidate>
-            <Input
-              label="Conversation title"
-              value={title}
-              onChange={(event) => setTitleDraft(event.target.value)}
-              maxLength={200}
-              error={titleError ?? undefined}
-              disabled={update.isPending}
-            />
-            <div className={styles.editActions}>
+  } else {
+    body = (
+      <>
+        {detailsOpen ? (
+          <section className={styles.details} aria-labelledby="conversation-details-title">
+            <h2 id="conversation-details-title" className={styles.optionTitle}>
+              Conversation details
+            </h2>
+            <form className={styles.detailsRow} onSubmit={saveTitle} noValidate>
+              <Input
+                label="Title"
+                value={title}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                maxLength={200}
+                error={titleError ?? undefined}
+                disabled={update.isPending}
+              />
               <Button type="submit" variant="secondary" size="sm" loading={update.isPending} disabled={!title.trim()}>
                 Save title
               </Button>
-              <span className={styles.hint}>Rename how this conversation appears in your list.</span>
+            </form>
+            <div className={styles.optionCopy}>
+              <p className={styles.optionHint}>How serious does this feel now?</p>
+              <SegmentedControl
+                label="Severity"
+                value={severity}
+                onValueChange={changeSeverity}
+                options={[
+                  { value: "MILD", label: "Mild" },
+                  { value: "MODERATE", label: "Moderate" },
+                  { value: "SEVERE", label: "Severe" },
+                ]}
+              />
             </div>
-          </form>
-
-          <div className={styles.editRow}>
-            <p className={styles.editLabel} id="severity-label">
-              Severity
-            </p>
-            <SegmentedControl
-              label="Severity"
-              value={severity}
-              onValueChange={changeSeverity}
-              options={[
-                { value: "MILD", label: "Mild" },
-                { value: "MODERATE", label: "Moderate" },
-                { value: "SEVERE", label: "Severe" },
-              ]}
-            />
-            <span className={styles.hint}>Change this if the record no longer matches how you feel.</span>
-          </div>
-
-          {editError ? (
-            <Alert tone="danger" title="Could not save this change">
-              {editError.message}
-              {editError.requestId ? <span className={styles.requestId}>Request {editError.requestId}</span> : null}
-            </Alert>
-          ) : null}
-
-          <p className={styles.statusLine} role="status">
-            {status}
-          </p>
-        </section>
-      </header>
-
-      {showSevere ? (
-        <Alert tone="warning" title="Seek urgent care now">
-          Severe symptoms can need emergency care. Call your local emergency number or go to the nearest emergency department
-          now. Do not wait for an online reply.
-        </Alert>
-      ) : null}
-
-      <section aria-labelledby="messages-title">
-        <h2 id="messages-title" className={styles.listTitle}>
-          Messages
-        </h2>
-        <ol className={styles.messageList} aria-label="Conversation messages">
-          {messages.map((message, index) => (
-            <li
-              key={`${message.type}-${index}`}
-              className={`${styles.message} ${message.type === "Human" ? styles.messageHuman : styles.messageAi}`}
-            >
-              <span className={styles.messageAuthor}>{message.type === "Human" ? "You" : "Assistant"}</span>
-              {message.type === "AI" ? (
-                <div className={styles.messageBubble}>
-                  <AssistantMessage content={message.content} />
-                </div>
-              ) : (
-                <div className={`${styles.messageBubble} ${styles.userBubble}`}>{message.content}</div>
-              )}
-            </li>
-          ))}
-
-          {phase === "pending" ? (
-            <>
-              <li className={`${styles.message} ${styles.messageHuman}`}>
-                <span className={styles.messageAuthor}>You</span>
-                <div className={`${styles.messageBubble} ${styles.userBubble}`}>{pendingMessage}</div>
-                <Badge tone="neutral" dot>
-                  Sending
-                </Badge>
-              </li>
-              <li className={`${styles.message} ${styles.messageAi}`}>
-                <span className={styles.messageAuthor}>Assistant</span>
-                <p className={styles.placeholder}>
-                  <span className={styles.dots} aria-hidden="true">
-                    <span />
-                    <span />
-                    <span />
-                  </span>
-                  Thinking. This can take up to 3 minutes.
-                </p>
-              </li>
-            </>
-          ) : null}
-        </ol>
-      </section>
-
-      <div className={styles.composer}>
-        {error ? (
-          <Alert
-            tone="danger"
-            title={
-              error.code === "ai_unavailable"
-                ? "The assistant is unavailable right now"
-                : error.code === "upstream_timeout" || error.code === "timeout"
-                  ? "This took too long"
-                  : "Could not send the follow-up"
-            }
-          >
-            {error.message}
-            {error.requestId ? <span className={styles.requestId}>Request {error.requestId}</span> : null}
-            {error.code === "upstream_timeout" || error.code === "timeout" ? (
-              <span> The reply may still arrive. Reload this conversation before trying again.</span>
+            {editError ? (
+              <Alert tone="danger" title="Could not save this change">
+                {editError.message}
+              </Alert>
             ) : null}
-          </Alert>
+            <p className={styles.contextNote} role="status">
+              {status}
+            </p>
+          </section>
         ) : null}
 
-        {error && retryable(error) ? (
-          <div className={styles.stateActions}>
-            <Button variant="secondary" size="sm" onClick={() => void submitFollowUp(lastMessage)}>
-              Try again
-            </Button>
-          </div>
-        ) : null}
-
-        {phase === "cancelled" ? (
-          <Alert tone="warning" title="Request cancelled">
-            We stopped waiting for the reply. The record may still have been updated, and it was refreshed. Check the messages
-            before sending again.
-          </Alert>
-        ) : null}
-
-        {phase === "pending" ? (
-          <div className={styles.formActions}>
-            <Button type="button" variant="secondary" onClick={() => controller.current?.abort()}>
-              Cancel
-            </Button>
-            <span className={styles.hint}>Cancelling does not remove a reply the server already saved.</span>
-          </div>
-        ) : tooLongDraft !== null ? (
-          <div className={styles.form}>
-            <Textarea
-              label="Your follow-up"
-              value={tooLongDraft}
-              onChange={(event) => setTooLongDraft(event.target.value)}
-              rows={5}
-              maxLength={MAX_MESSAGE}
-              description={`${tooLongDraft.length.toLocaleString()} of ${MAX_MESSAGE.toLocaleString()} characters`}
-              error={tooLongDraft.length > MAX_MESSAGE ? "Keep the follow-up to 8,000 characters or fewer." : undefined}
-            />
-            <div className={styles.formActions}>
-              <Button
-                type="button"
-                disabled={!tooLongDraft.trim() || tooLongDraft.length > MAX_MESSAGE}
-                onClick={() => {
-                  const next = tooLongDraft;
-                  setTooLongDraft(null);
-                  void submitFollowUp(next);
-                }}
-              >
-                Try sending again
-              </Button>
-              <Button type="button" variant="ghost" onClick={() => setTooLongDraft(null)}>
-                Discard draft
-              </Button>
+        <ChatMessages
+          messages={messages}
+          pending={stream.pending}
+          reply={stream.reply}
+          activity={stream.activity}
+          phase={stream.phase}
+          userInitial={initial}
+          language={symptom?.language}
+        >
+          {normaliseSeverity(symptom?.severity) === "SEVERE" ? (
+            <div className={styles.urgent}>
+              <Alert tone="warning" title="This may need urgent care">
+                If symptoms are severe or getting worse, call your local emergency number or go to the nearest emergency
+                department now. Don&apos;t wait for an online reply.
+              </Alert>
             </div>
-          </div>
-        ) : (
-          <ChatComposer onSend={handleSend} placeholder="Ask a follow-up" allowAttachments={false} />
-        )}
+          ) : null}
+        </ChatMessages>
 
-        <AssistantSafetyNote />
-      </div>
+        {stream.phase === "error" && stream.error ? (
+          <div className={styles.urgent}>
+            <StreamError
+              error={stream.error}
+              onRetry={
+                // If the server already saved this message, retrying would post it twice.
+                savedLastAttempt ? undefined : () => void stream.retry()
+              }
+              extra={
+                savedLastAttempt ? (
+                  <span>Your message was saved above. Send a new message to continue.</span>
+                ) : undefined
+              }
+            />
+          </div>
+        ) : null}
+        {stream.phase === "cancelled" ? (
+          <div className={styles.urgent}>
+            <Alert tone="warning" title="Stopped">
+              The reply was stopped. Anything already saved is shown above.
+            </Alert>
+          </div>
+        ) : null}
+
+        <ChatInput
+          onSend={(message, files) => void stream.start({ mode: "followup", id, message, files })}
+          streaming={streaming}
+          onStop={stream.cancel}
+          placeholder="Reply or ask a follow-up…"
+        />
+      </>
+    );
+  }
+
+  return (
+    <div className={styles.shell}>
+      <ConversationSidebar activeId={id} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <section className={styles.main} aria-label="Conversation">
+        {header}
+        {body}
+      </section>
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent
           title="Delete this conversation?"
           description="This removes the conversation and its attachments. It cannot be undone."
         >
-          <div className={styles.dialogBody}>
+          <div className={base.dialogBody}>
             {editError ? (
               <Alert tone="danger" title="Could not delete this conversation">
                 {editError.message}
-                {editError.requestId ? <span className={styles.requestId}>Request {editError.requestId}</span> : null}
               </Alert>
             ) : null}
-            <div className={styles.dialogActions}>
+            <div className={base.dialogActions}>
               <Button variant="secondary" onClick={() => setDeleteOpen(false)}>
                 Keep conversation
               </Button>

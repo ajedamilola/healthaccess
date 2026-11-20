@@ -1,6 +1,7 @@
 export const qk = {
   session: ["session"] as const,
   me: ["me"] as const,
+  assistantContext: ["me", "assistant-context"] as const,
   fields: ["fields"] as const,
   emergency: ["emergency"] as const,
   patientCode: ["patient-code"] as const,

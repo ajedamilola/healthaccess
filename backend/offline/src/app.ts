@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import express from 'express';
-import type { ErrorRequestHandler } from 'express';
+import type { ErrorRequestHandler, Request } from 'express';
 import type { Config } from './config.js';
 import type { Crypto } from './security/crypto.js';
 import { z } from 'zod';
@@ -56,10 +56,53 @@ type AppConfig = Pick<
   | 'callbackAuthMode'
   | 'callbackPathKey'
   | 'callbackRatePerMinute'
+  | 'callbackPhoneRatePerMinute'
   | 'callbackBodyLimitBytes'
   | 'atSmsInboundNumbers'
   | 'atUssdServiceCode'
+  | 'httpLogBodies'
 >;
+
+const CALLBACK_PREFIX = '/callbacks/africastalking/';
+const PHONE_BODY_KEYS = new Set(['from', 'to', 'phoneNumber']);
+const TEXT_BODY_KEYS = new Set(['text']);
+
+function maskPhone(value: string): string {
+  const digits = value.replace(/\D/g, '');
+  const last = digits.slice(-4);
+  return last ? `***${last}` : '[redacted]';
+}
+
+function redactBody(body: unknown): unknown {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+  const output: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
+    if (PHONE_BODY_KEYS.has(key) && typeof value === 'string') {
+      output[key] = maskPhone(value);
+      continue;
+    }
+    if (TEXT_BODY_KEYS.has(key) && typeof value === 'string') {
+      output[key] = `[redacted ${value.length} chars]`;
+      continue;
+    }
+    if (key === 'sessionId' && typeof value === 'string') {
+      output[key] = `${value.slice(0, 6)}...(${value.length})`;
+      continue;
+    }
+    output[key] = value;
+  }
+  return output;
+}
+
+function logUrl(req: Request): string {
+  let url = req.originalUrl;
+  if (url.startsWith(CALLBACK_PREFIX)) {
+    const rest = url.slice(CALLBACK_PREFIX.length);
+    const slash = rest.indexOf('/');
+    url = `${CALLBACK_PREFIX}[token]${slash >= 0 ? rest.slice(slash) : ''}`;
+  }
+  return url.replace(/([?&](?:token|key|secret|code)=)[^&]*/gi, '$1[redacted]');
+}
 
 export function createApp({
   config,
@@ -72,7 +115,7 @@ export function createApp({
   repository: CallbackRepository;
   crypto: Pick<Crypto, 'fingerprint'>;
   ussdHandler(body: UssdCallback, requestId: string): Promise<string>;
-  logger?: Pick<Console, 'error'>;
+  logger?: Pick<Console, 'error' | 'info'>;
 }) {
   const app = express();
   app.disable('x-powered-by');
@@ -82,6 +125,23 @@ export function createApp({
       'Cache-Control': 'no-store',
       'X-Content-Type-Options': 'nosniff',
       'X-Request-ID': res.locals.requestId,
+    });
+    const startedAt = Date.now();
+    res.on('finish', () => {
+      const entry: Record<string, unknown> = {
+        event: 'http_request',
+        requestId: res.locals.requestId,
+        method: req.method,
+        url: logUrl(req),
+        status: res.statusCode,
+        duration_ms: Date.now() - startedAt,
+      };
+      if (config.httpLogBodies !== 'off') {
+        const body = req.body;
+        entry.body =
+          config.httpLogBodies === 'full' ? (body ?? null) : (redactBody(body) ?? null);
+      }
+      logger.info(JSON.stringify(entry));
     });
     next();
   });
@@ -118,6 +178,22 @@ export function createApp({
   callbacks.use(
     express.json({ limit: config.callbackBodyLimitBytes, strict: true, inflate: false }),
   );
+  // One noisy phone must not use up everyone else's share of the provider IPs.
+  callbacks.use(async (req, res, next) => {
+    try {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const sender = typeof body.from === 'string' ? body.from : body.phoneNumber;
+      if (typeof sender === 'string' && sender) {
+        const scope = crypto.fingerprint(`callback-phone:${sender.replace(/\D/g, '')}`);
+        if (!(await repository.takeRateLimit(scope, config.callbackPhoneRatePerMinute, 60))) {
+          return res.status(429).set('Retry-After', '60').type('text').send('Retry later');
+        }
+      }
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
   callbacks.post('/sms/inbound', async (req, res) => {
     const body = smsSchema.parse(req.body);
     if (!config.atSmsInboundNumbers.some((number) => sameNumber(number, body.to)))

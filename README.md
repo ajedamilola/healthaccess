@@ -19,14 +19,17 @@ the source of truth. The old SQL schemas, routines and FastAPI plan are retired.
 ## Status
 
 The backend feature phases are implemented and verified: the Prisma schema and
-both migrations exist, the online API boots with health checks, and the seed
-creates reference data plus clearly labeled demo fixtures. The online API covers
-auth/users, portal/grants, directory, symptom chat/AI and medications with
-reminders; the offline SMS/USSD service is Prisma-backed. Workspace typecheck is
-clean, the shared suite passes 4/4, offline unit tests 71/71, offline Prisma
-integration 20/20, and the online DB suite 78/78. Live FCM delivery, real
-Africa's Talking provisioning and production monitoring remain unverified. There
-is no frontend application yet. See [`docs/README.md`](docs/README.md).
+three migrations exist, the online API boots with health checks, and the seed
+creates reference data plus an optional sandbox patient (no demo facilities). The
+online API covers auth/users, portal/grants, approved plus live Serper directory
+results, emergency requests, symptom chat/AI with SSE streaming and medications
+with reminders; the offline SMS/USSD service is Prisma-backed and uses live
+Serper emergency/care search when the directory has no approved non-demo result.
+Workspace typecheck is clean, the shared suite passes 4/4, offline unit tests
+85/85, offline Prisma integration 20/20, and the online DB suite 108/108. Live
+FCM delivery, real Africa's Talking provisioning and production monitoring remain
+unverified. There is no frontend application yet. See
+[`docs/README.md`](docs/README.md).
 
 ## Repository map
 
@@ -48,10 +51,13 @@ docker-compose.yml deploys online, offline (server + worker), docs, PostgreSQL a
 
 ## Quick start
 
-Prerequisites: Node 24+, npm 11+, and a PostgreSQL 16 instance. Redis and
-S3/MinIO are optional unless you enable those features. The repository compose
-file does not start infrastructure; it deploys the application services against
-the instances you already run.
+Prerequisites: Node 24+, npm 11+. For direct npm runs you need a PostgreSQL 16
+instance; Redis and S3/MinIO are optional. The Docker section below includes
+PostgreSQL and Redis, so you only need those externally if you run the services
+without Docker.
+
+The commands below run the services directly with npm. For the compose stack,
+skip to [Docker deployment](#docker-deployment).
 
 ```sh
 npm install
@@ -80,6 +86,119 @@ npm run dev:worker
 The offline service uses the same Prisma schema and migrations as online, so no
 second schema or `db:apply` step is needed. Its full DB integration run needs a
 disposable database; see [`docs/operations.md`](docs/operations.md).
+
+## Environment templates
+
+Copy each block into the matching file. The root `.env` is optional and only
+customizes the compose stack; the two backend files are required.
+
+### Root `.env` (optional, compose only)
+
+```dotenv
+# Change before the first real deployment.
+POSTGRES_PASSWORD=healthaccess
+TZ=Africa/Lagos
+ONLINE_PORT=3000
+OFFLINE_PORT=3001
+DOCS_PORT=8080
+```
+
+### `backend/online/.env`
+
+```dotenv
+# Leave empty for Docker: compose supplies the included Postgres.
+# Set only for direct npm runs.
+DATABASE_URL=
+CODE_DIGEST_KEY=
+DATA_ENCRYPTION_KEY=
+PHONE_DIGEST_KEY=
+INPUT_FINGERPRINT_KEY=
+ENCRYPTION_KEY_VERSION=1
+
+JWT_SECRET=
+JWT_ACCESS_TTL_SECONDS=900
+REFRESH_TTL_DAYS=30
+
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+BASE_URL=http://localhost:3000
+FRONTEND_URL=http://localhost:5173
+
+AWS_REGION=
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_BUCKET_NAME=
+S3_ENDPOINT=
+S3_FORCE_PATH_STYLE=false
+
+# Leave empty for Docker: compose supplies redis://redis:6379.
+# Set only for direct npm runs.
+REDIS_URL=redis://localhost:6379
+
+OPENROUTER_API_KEY=
+OPENROUTER_MODEL=deepseek/deepseek-chat
+DEEPSEEK_API_KEY=
+GOOGLE_API_KEY=
+ANTHROPIC_API_KEY=
+GROQ_API_KEY=
+SERPER_API_KEY=
+CHAT_MODEL=openrouter
+PRESCRIPTION_MODEL=haiku
+MEDICATION_SCHEDULER_MODEL=openrouter
+
+FIREBASE_SERVICE_ACCOUNT=
+FCM_ENABLED=false
+
+AT_USERNAME=sandbox
+AT_API_KEY=
+AT_SMS_FROM=
+
+NODE_ENV=development
+PORT=3000
+LOG_LEVEL=info
+```
+
+### `backend/offline/.env`
+
+```dotenv
+# Leave empty for Docker: compose supplies the included Postgres.
+# Set only for direct npm runs.
+DATABASE_URL=
+CODE_DIGEST_KEY=
+DATA_ENCRYPTION_KEY=
+ENCRYPTION_KEY_VERSION=1
+
+CALLBACK_ALLOWED_IPS=
+CALLBACK_TOKEN=
+
+AT_USERNAME=sandbox
+AT_API_KEY=
+AT_SMS_FROM=
+AT_USSD_SERVICE_CODE=
+
+OPENROUTER_API_KEY=
+OPENROUTER_MODEL=
+SERPER_API_KEY=
+
+NODE_ENV=development
+PORT=3001
+# off | redacted | full. Full logs callback bodies; local debugging only.
+LOG_HTTP_BODIES=full
+```
+
+Shared rules:
+
+- `CODE_DIGEST_KEY`, `DATA_ENCRYPTION_KEY` and `ENCRYPTION_KEY_VERSION` must
+  match across both backend files. Either set `PHONE_DIGEST_KEY` and
+  `INPUT_FINGERPRINT_KEY` identically in both, or leave them empty in both.
+- `JWT_SECRET` is online only.
+- For Docker, leave `DATABASE_URL` and `REDIS_URL` empty. Compose sets
+  `postgresql://healthaccess:<POSTGRES_PASSWORD>@postgres:5432/healthaccess` and
+  `redis://redis:6379`. Their values only matter for direct `npm` runs.
+- `NODE_ENV=development` uses sandbox/mock SMS. `production` requires live
+  Africa's Talking credentials, `AT_SMS_FROM`, `AT_USSD_SERVICE_CODE` and
+  `CALLBACK_ALLOWED_IPS`.
+- Generate keys with `cd backend/offline && npm run keys:generate`.
 
 ## Docker deployment
 
@@ -134,7 +253,7 @@ credentials (`AT_USERNAME` not `sandbox`, `AT_API_KEY`), the provisioned
 
 ```sh
 docker compose up -d --build
-docker compose run --rm online npm run db:seed   # optional demo fixtures
+docker compose run --rm online npm run db:seed   # optional seed and sandbox patient
 docker compose ps
 docker compose logs -f online
 ```
@@ -156,28 +275,91 @@ and re-runs the `migrate` service on `up --build`.
 `docker compose down` stops the stack; `docker compose down -v` also deletes the
 Postgres and Redis volumes.
 
+### On a cloud server
+
+```sh
+# If Docker is missing:
+# curl -fsSL https://get.docker.com | sh
+# sudo usermod -aG docker "$USER"   # then log out and back in
+
+git clone <your-repo-url> healthaccess
+cd healthaccess
+
+cp .env.example .env
+cp backend/online/.env.example backend/online/.env
+cp backend/offline/.env.example backend/offline/.env
+# Edit the three files. Leave DATABASE_URL and REDIS_URL empty for Docker.
+```
+
+Generate the secrets on the server:
+
+```sh
+openssl rand -hex 24     # POSTGRES_PASSWORD (URL-safe)
+openssl rand -base64 32  # CODE_DIGEST_KEY
+openssl rand -base64 32  # DATA_ENCRYPTION_KEY (must differ)
+openssl rand -hex 32     # JWT_SECRET
+openssl rand -hex 32     # CALLBACK_TOKEN
+```
+
+Put the same `CODE_DIGEST_KEY`, `DATA_ENCRYPTION_KEY` and
+`ENCRYPTION_KEY_VERSION` in both backend env files. Then start:
+
+```sh
+docker compose up -d --build
+docker compose run --rm online npm run db:seed   # optional demo data
+docker compose ps
+docker compose logs -f online
+```
+
+Open the ports in the cloud security group and the host firewall:
+
+```sh
+sudo ufw allow 3000/tcp   # API
+sudo ufw allow 3001/tcp   # Africa's Talking callbacks
+sudo ufw allow 8080/tcp   # docs plus same-origin /v1
+```
+
+- API: `http://SERVER_IP:3000/v1`
+- Docs: `http://SERVER_IP:8080`
+- Offline callbacks: `http://SERVER_IP:3001`
+
+For production, put Nginx or Caddy on 80/443 and set `BASE_URL` and
+`FRONTEND_URL` to the public domains. The included Postgres and Redis are not
+published; connect with
+`docker compose exec postgres psql -U healthaccess -d healthaccess`.
+
+Back up the database and keep the env files and crypto keys safe:
+
+```sh
+docker compose exec -T postgres pg_dump -U healthaccess healthaccess > healthaccess.sql
+```
+
+`docker compose down` stops the stack; `down -v` deletes the Postgres and Redis
+volumes. If `npm ci`/the build runs out of memory on a small VPS, add swap or
+build the images on a larger machine and push them to a registry.
+
 For keys, environment details, sandbox callbacks and troubleshooting, read
 [`docs/operations.md`](docs/operations.md).
 
-## Demo fixtures
+## Seed and sandbox data
 
-`npm run db:seed` is idempotent and creates reference data plus clearly labeled
-demo fixtures:
+`npm run db:seed` is idempotent and creates reference data plus an optional
+sandbox patient:
 
 - 15 field definitions, including emergency-eligible name, date of birth,
   allergies, current medications, conditions, blood group and emergency contact.
 - 3 services: `general`, `pediatrics`, `maternity`.
-- Demo area `Ikeja`, demo facilities `Demo Community Hospital` and `Demo Child
-  Health Clinic` (both approved and `is_demo`), with `general` and `pediatrics`
-  facility services.
-- Demo patient `demo.patient@example.test` with demo password `DemoPass123!`,
+- Real area `Ikeja, Lagos` with `is_demo = false`.
+- Sandbox patient `demo.patient@example.test` with password `DemoPass123!`,
   patient code `123456789012`, five profile values and emergency fields for
   allergies and emergency contact.
+- No demo facilities. The seed removes legacy demo facility rows. Directory and
+  care-search results come from approved non-demo facilities plus live Serper
+  Maps leads; live leads are labelled unverified and never presented as approved.
 
-The demo credentials are fixtures, not production credentials. Demo facilities
-are `is_demo` and renderers label them `DEMO`. Do not present them as an approved
-real directory. `backend/offline/scripts/seed-demo.ts` writes the same Prisma
-fixtures for offline sandbox testing; the online seed is the canonical step.
+The sandbox credentials are fixtures, not production credentials.
+`backend/offline/scripts/seed-demo.ts` writes the same reference area and sandbox
+patient for offline testing; the online seed is the canonical step.
 
 ## Tests
 
@@ -190,11 +372,11 @@ npm run test --workspace @healthaccess/shared
 npm run test --workspace @healthaccess/offline
 ```
 
-Current results: typecheck clean, shared 4/4, offline unit 71/71. The offline
+Current results: typecheck clean, shared 4/4, offline unit 85/85. The offline
 Prisma integration suite passes 20/20 against a disposable database. `npm test`
-at the root runs every workspace, including the online DB integration suite, so
-it needs a configured database; use the two workspace commands above for a
-database-free run.
+at the root runs every workspace, including the online DB integration suite
+(108/108), so it needs a configured database; use the two workspace commands
+above for a database-free run.
 
 The online tests under `backend/online/tests/` exercise PostgreSQL and are DB
 integration tests, so CI does not run them. Run them locally against a

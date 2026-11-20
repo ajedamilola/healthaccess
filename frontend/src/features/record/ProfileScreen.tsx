@@ -6,6 +6,7 @@ import { AccountSection } from "./AccountSection";
 import { AvatarSection } from "./AvatarSection";
 import { MedicalSection } from "./MedicalSection";
 import { OfflineBanner } from "./OfflineBanner";
+import { PersonalSection } from "./PersonalSection";
 import { LoadError, PageIntro } from "./States";
 import styles from "./record.module.css";
 
@@ -51,6 +52,7 @@ export function ProfileScreen() {
       />
       <OfflineBanner />
       <AccountSection me={me.data} />
+      <PersonalSection me={me.data} />
       <MedicalSection me={me.data} />
       <AvatarSection me={me.data} />
     </div>

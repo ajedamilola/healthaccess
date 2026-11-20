@@ -24,6 +24,34 @@ function bool(name: string, fallback = false) {
   return value === 'true' || value === '1';
 }
 
+function emailConfig() {
+  const host = optional('SMTP_HOST');
+  const portValue = optional('SMTP_PORT');
+  const user = optional('SMTP_USER');
+  const password = optional('SMTP_PASSWORD');
+  const from = optional('EMAIL_FROM');
+  if (!host) {
+    if (portValue || user || password || from) {
+      throw new Error('SMTP_HOST is required when email settings are provided');
+    }
+    return null;
+  }
+  if (!from) throw new Error('EMAIL_FROM is required when SMTP_HOST is configured');
+  if (!!user !== !!password) throw new Error('Set both SMTP_USER and SMTP_PASSWORD');
+  const port = portValue ? Number(portValue) : 587;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('SMTP_PORT must be an integer between 1 and 65535');
+  }
+  return {
+    host,
+    port,
+    secure: port === 465,
+    user,
+    password,
+    from,
+  };
+}
+
 export const config = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: int('PORT', 3000),
@@ -41,6 +69,7 @@ export const config = {
   googleClientSecret: optional('GOOGLE_CLIENT_SECRET'),
   baseUrl: optional('BASE_URL') ?? 'http://localhost:3000',
   frontendUrl: optional('FRONTEND_URL') ?? 'http://localhost:5173',
+  email: emailConfig(),
   s3: {
     region: optional('AWS_REGION'),
     accessKeyId: optional('AWS_ACCESS_KEY_ID'),

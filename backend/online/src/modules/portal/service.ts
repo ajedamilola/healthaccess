@@ -264,6 +264,8 @@ export async function createGrant(input: CreateGrantInput): Promise<CreatedGrant
     const code = numericCode(8);
     const digest = cryptoService.digestCode(code, 'grant');
     if (!digest) continue;
+    // Codes work on their own, so a live code must be unique across all patients.
+    if (await findLiveGrantPatient(digest)) continue;
 
     try {
       const grant = await prisma.accessGrant.create({
@@ -289,6 +291,32 @@ export async function createGrant(input: CreateGrantInput): Promise<CreatedGrant
   }
 
   throw new AppError(500, 'Could not allocate grant code', 'code_generation_failed');
+}
+
+/** The patient behind a live temporary access code, or null when absent or ambiguous. */
+export async function findLiveGrantPatient(digest: string) {
+  const grants = await prisma.accessGrant.findMany({
+    where: { code_digest: digest, revoked_at: null, expires_at: { gt: new Date() } },
+    select: { patient_id: true },
+    take: 2,
+  });
+  return grants.length === 1 ? grants[0]! : null;
+}
+
+/** Fields for a one-tap share: the emergency summary, or every filled emergency-eligible field. */
+export async function quickShareFieldKeys(patientId: string): Promise<string[]> {
+  const selected = await prisma.emergencyField.findMany({
+    where: { patient_id: patientId, field: { active: true } },
+    orderBy: { display_order: 'asc' },
+    select: { field_key: true },
+  });
+  if (selected.length) return selected.map((row) => row.field_key);
+  const filled = await prisma.patientFieldValue.findMany({
+    where: { patient_id: patientId, field: { active: true, emergency_eligible: true } },
+    orderBy: { field: { sort_order: 'asc' } },
+    select: { field_key: true },
+  });
+  return filled.map((row) => row.field_key);
 }
 
 export interface GrantSummary {

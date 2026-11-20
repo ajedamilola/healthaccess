@@ -46,8 +46,8 @@
     -webkit-text-size-adjust: 100%;
   }
   body {
-    background: var(--color-wash);
-    color: var(--color-ink);
+    background: var(--background, var(--color-wash));
+    color: var(--foreground, var(--color-ink));
     font-family: var(--font-sans);
     line-height: 1.55;
   }

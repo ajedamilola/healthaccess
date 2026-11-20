@@ -6,7 +6,7 @@ import { logRequest } from "@/lib/log";
 type RouteParams = { params: Promise<{ path: string[] }> };
 
 function aiPath(method: string, path: string) {
-  if (method === "POST" && (path === "symptom" || /^symptom\/[^/]+\/follow-up$/.test(path))) return true;
+  if (method === "POST" && /^symptom(\/stream|\/[^/]+\/follow-up(\/stream)?)?$/.test(path)) return true;
   return (method === "POST" || method === "PATCH") && (path === "medications" || path.startsWith("medications/"));
 }
 
@@ -40,7 +40,8 @@ async function handle(request: NextRequest, { params }: RouteParams) {
       headers,
       body: hasBody && request.body ? request.body : undefined,
       cache: "no-store",
-      signal: AbortSignal.timeout(timeout),
+      // Abort upstream work when the browser disconnects (for example a cancelled stream).
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]),
       // Required by Node's fetch when streaming a request body through.
       ...({ duplex: "half" } as Record<string, unknown>),
     });
@@ -56,9 +57,22 @@ async function handle(request: NextRequest, { params }: RouteParams) {
     return jsonNoStore({ error: "token_expired" }, 401);
   }
 
+  const upstreamType = upstream.headers.get("content-type");
+  if (upstream.ok && upstreamType?.includes("text/event-stream") && upstream.body) {
+    // Pass server-sent events through as they arrive instead of buffering the full reply.
+    const streamHeaders: Record<string, string> = {
+      "content-type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    };
+    const streamRequestId = upstream.headers.get("x-request-id");
+    if (streamRequestId) streamHeaders["x-request-id"] = streamRequestId;
+    return new Response(upstream.body, { status: upstream.status, headers: streamHeaders });
+  }
+
   const body = upstream.status === 204 ? null : await upstream.text();
   const responseHeaders: Record<string, string> = { "Cache-Control": "no-store" };
-  const upstreamType = upstream.headers.get("content-type");
   if (upstreamType) responseHeaders["content-type"] = upstreamType;
   const requestId = upstream.headers.get("x-request-id");
   if (requestId) responseHeaders["x-request-id"] = requestId;

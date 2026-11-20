@@ -4,6 +4,12 @@ import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { config } from '../config.js';
 import { prisma } from '../db.js';
 import { AppError } from '../middleware/error.js';
+import {
+  buildPatientSnapshot,
+  emergencyNumberFor,
+  languageName,
+  renderSnapshot,
+} from './context.js';
 import { defaultSchedulerModel, getModel } from './models.js';
 import {
   medicationAdderPrompt,
@@ -32,11 +38,62 @@ export interface ConversationEntry {
   content: string;
 }
 
+export type SymptomStreamStepStatus = 'started' | 'completed' | 'failed';
+
+export interface SymptomStreamStep {
+  type: 'step';
+  id: string;
+  name: string;
+  status: SymptomStreamStepStatus;
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+}
+
+export type SymptomStreamEvent =
+  | { type: 'token'; content: string }
+  | SymptomStreamStep
+  | { type: 'done'; messages: ConversationEntry[] };
+
+export interface SymptomStreamOptions {
+  signal?: AbortSignal;
+}
+
+const MAX_STREAM_PAYLOAD = 2000;
+
+function boundedPayload(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  if (typeof value === 'string') {
+    return value.length > MAX_STREAM_PAYLOAD
+      ? `${value.slice(0, MAX_STREAM_PAYLOAD)}…[truncated]`
+      : value;
+  }
+  try {
+    const json = JSON.stringify(value);
+    if (json === undefined) return undefined;
+    return json.length > MAX_STREAM_PAYLOAD
+      ? `${json.slice(0, MAX_STREAM_PAYLOAD)}…[truncated]`
+      : value;
+  } catch {
+    return '[unserializable]';
+  }
+}
+
+function boundedError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error ?? 'Tool failed');
+  return message.length > MAX_STREAM_PAYLOAD
+    ? `${message.slice(0, MAX_STREAM_PAYLOAD)}…[truncated]`
+    : message;
+}
+
 export interface SymptomAgentContext extends AgentToolContext {
   symptomId: string;
   includeRecords: boolean;
   modifyHistory: boolean;
   hasImages?: boolean;
+  patientContext?: string | null;
+  language?: string | null;
+  emergencyNumber?: string | null;
 }
 
 export interface MedicationAgentContext {
@@ -136,11 +193,41 @@ export function getSymptomAgent(context: SymptomAgentContext) {
       includeRecords: context.includeRecords,
       modifyHistory: context.modifyHistory,
       hasImages: Boolean(context.hasImages),
+      patientContext: context.patientContext,
+      language: context.language,
+      emergencyNumber: context.emergencyNumber,
+      today: new Date().toISOString().slice(0, 10),
     }),
     llm: model,
     tools,
     checkpointer: getCheckpointer(),
   });
+}
+
+/**
+ * Load the de-identified patient snapshot for the prompt. Location and language
+ * are part of the record, so they are only used when the patient allowed it.
+ */
+export async function withPatientContext(
+  context: SymptomAgentContext,
+): Promise<SymptomAgentContext> {
+  const chosen = context.language ? languageName(context.language) : null;
+  if (!context.includeRecords) {
+    return { ...context, patientContext: null, language: chosen, emergencyNumber: null };
+  }
+  try {
+    const snapshot = await buildPatientSnapshot(context.patientId);
+    if (!snapshot) return { ...context, language: chosen };
+    return {
+      ...context,
+      patientContext: renderSnapshot(snapshot),
+      language: chosen ?? languageName(snapshot.preferredLanguage),
+      emergencyNumber: snapshot.emergencyNumber ?? emergencyNumberFor(snapshot.location.country),
+    };
+  } catch {
+    // The assistant still works without personal context; the tool can retry the lookup.
+    return { ...context, language: chosen };
+  }
 }
 
 export async function runSymptomChat(
@@ -149,7 +236,7 @@ export async function runSymptomChat(
 ): Promise<ConversationEntry[]> {
   await ensureCheckpointerReady();
   const agent = getSymptomAgent({
-    ...context,
+    ...(await withPatientContext(context)),
     hasImages: Boolean(input.images?.length),
   });
   const result = await agent.invoke(
@@ -158,6 +245,82 @@ export async function runSymptomChat(
   );
   const messages = Array.isArray(result.messages) ? (result.messages as BaseMessage[]) : [];
   return toConversation(messages);
+}
+
+function streamChunkText(chunk: unknown): string {
+  if (!chunk) return '';
+  if (typeof chunk === 'string') return chunk;
+  if (typeof chunk === 'object' && 'content' in chunk) {
+    return messageText((chunk as { content?: unknown }).content);
+  }
+  return '';
+}
+
+export async function* runSymptomChatStream(
+  context: SymptomAgentContext,
+  input: AgentMessageInput,
+  options: SymptomStreamOptions = {},
+): AsyncGenerator<SymptomStreamEvent> {
+  await ensureCheckpointerReady();
+  const threadId = threadIdFor(context.symptomId);
+  const agent = getSymptomAgent({
+    ...(await withPatientContext(context)),
+    hasImages: Boolean(input.images?.length),
+  });
+
+  const events = agent.streamEvents(
+    { messages: [buildHumanMessage(input)] },
+    {
+      version: 'v2',
+      configurable: { thread_id: threadId },
+      ...(options.signal ? { signal: options.signal } : {}),
+    },
+  );
+
+  for await (const event of events) {
+    if (event.event === 'on_chat_model_stream') {
+      const content = streamChunkText(event.data?.chunk);
+      if (content) {
+        yield { type: 'token', content };
+      }
+      continue;
+    }
+
+    if (event.event === 'on_tool_start') {
+      yield {
+        type: 'step',
+        id: event.run_id,
+        name: event.name,
+        status: 'started',
+        input: boundedPayload(event.data?.input),
+      };
+      continue;
+    }
+
+    if (event.event === 'on_tool_end') {
+      yield {
+        type: 'step',
+        id: event.run_id,
+        name: event.name,
+        status: 'completed',
+        output: boundedPayload(streamChunkText(event.data?.output) || event.data?.output),
+      };
+      continue;
+    }
+
+    if (event.event === 'on_tool_error') {
+      const toolError = (event.data as Record<string, unknown> | undefined)?.error;
+      yield {
+        type: 'step',
+        id: event.run_id,
+        name: event.name,
+        status: 'failed',
+        error: boundedError(toolError),
+      };
+    }
+  }
+
+  yield { type: 'done', messages: await readSymptomHistory(threadId) };
 }
 
 export async function readSymptomHistory(threadId: string): Promise<ConversationEntry[]> {

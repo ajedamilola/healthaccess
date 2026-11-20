@@ -25,6 +25,7 @@ test(
     const closeFacility = randomUUID();
     const farFacility = randomUUID();
     const unverifiedFacility = randomUUID();
+    const demoFacility = randomUUID();
     const patientAccount = randomUUID();
     const doctorAccount = randomUUID();
     const patientId = randomUUID();
@@ -119,10 +120,12 @@ test(
           await prisma.facility.deleteMany({ where: { id: nearbyFacility } });
         }
         await prisma.facilityService.deleteMany({
-          where: { facility_id: { in: [closeFacility, farFacility, unverifiedFacility] } },
+          where: {
+            facility_id: { in: [closeFacility, farFacility, unverifiedFacility, demoFacility] },
+          },
         });
         await prisma.facility.deleteMany({
-          where: { id: { in: [closeFacility, farFacility, unverifiedFacility] } },
+          where: { id: { in: [closeFacility, farFacility, unverifiedFacility, demoFacility] } },
         });
         await prisma.area.deleteMany({
           where: { id: { in: [areaId, ...(nearbyArea ? [nearbyArea] : [])] } },
@@ -312,7 +315,7 @@ test(
           latitude: 6.602,
           longitude: 3.352,
           status: 'APPROVED',
-          is_demo: true,
+          is_demo: false,
         },
         {
           id: farFacility,
@@ -322,7 +325,7 @@ test(
           latitude: 6.7,
           longitude: 3.5,
           status: 'APPROVED',
-          is_demo: true,
+          is_demo: false,
         },
         {
           id: unverifiedFacility,
@@ -331,6 +334,16 @@ test(
           area_id: areaId,
           latitude: 6.6019,
           longitude: 3.3519,
+          status: 'APPROVED',
+          is_demo: false,
+        },
+        {
+          id: demoFacility,
+          name: 'Demo General Hospital',
+          address: '4 Demo Road, Ikeja',
+          area_id: areaId,
+          latitude: 6.602,
+          longitude: 3.352,
           status: 'APPROVED',
           is_demo: true,
         },
@@ -354,6 +367,12 @@ test(
           facility_id: unverifiedFacility,
           service_code: servicePediatrics,
           verification_status: 'UNVERIFIED',
+        },
+        {
+          facility_id: demoFacility,
+          service_code: serviceGeneral,
+          verification_status: 'APPROVED',
+          verified_at: new Date(),
         },
       ],
     });
@@ -533,7 +552,7 @@ test(
     });
 
     await t.test(
-      'directory filters by approved service before distance and reviewed content is published-only',
+      'directory filters by approved service and demo flag before distance and reviewed content is published-only',
       async () => {
         const services = await withScoped((scoped) => scoped.listServices());
         assert.ok(services.some((service) => service.service_code === serviceGeneral));
@@ -558,6 +577,7 @@ test(
           general.map((facility) => facility.id),
           [closeFacility],
         );
+        assert.ok(!general.some((facility) => facility.id === demoFacility));
 
         const found = await withScoped((scoped) =>
           scoped.getFacility(closeFacility, serviceGeneral, areaId, 50),
@@ -612,7 +632,7 @@ test(
     });
 
     await t.test(
-      'radius search crosses area boundaries and preserves fictional-data labels',
+      'radius search crosses area boundaries',
       async () => {
         nearbyArea = randomUUID();
         nearbyFacility = randomUUID();
@@ -639,7 +659,7 @@ test(
               latitude: 6.602,
               longitude: 3.352,
               status: 'APPROVED',
-              is_demo: true,
+              is_demo: false,
             },
           });
           await prisma.facilityService.create({
@@ -655,7 +675,7 @@ test(
           );
           const nearby = result.find((facility) => facility.id === nearbyFacility);
           assert.ok(nearby);
-          assert.equal(nearby?.is_demo, true);
+          assert.equal(nearby?.is_demo, false);
           assert.ok(Number(nearby?.distance_km) < 1);
           assert.ok(result.some((facility) => facility.id === farFacility));
         } finally {

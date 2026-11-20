@@ -37,6 +37,7 @@ Owned by `src/app.ts` and `src/routes.ts`:
 /v1/auth          authRouter
 /v1/me            meRouter (users) and mePortalRouter (portal)
 /v1/directory     directoryRouter
+/v1/emergency     emergencyRouter
 /v1/records       recordsRouter
 /v1/symptom       symptomRouter
 /v1/medications   medicationsRouter
@@ -47,6 +48,17 @@ Each module is expected to export a named Express `Router` from
 `src/modules/<name>/router.ts`. Modules must not import each other; shared needs
 go through `src/services/**`, `src/domain/**` or `backend/shared`.
 
+Directory reads merge approved, non-demo facilities from the database with live
+Serper Maps results. Live results are stored as `sources` + `web_leads`, labelled
+`verification_status: "unverified"`, and are never presented as verified
+facilities. `include_live=false` disables the live supplement for a request.
+
+`POST /v1/emergency` searches live emergency hospitals and ambulance services
+through Serper, stores an `emergency_requests` row scoped to the authenticated
+account, and returns ranked contact results plus immediate-call guidance. It does
+not dispatch an ambulance. `GET /v1/emergency` and `GET /v1/emergency/:id` are
+account-scoped history reads.
+
 Implementation status: auth, users, portal, directory, symptom and medication
 routers have handlers. The AI layer (`src/ai/`), medication reminder job and FCM
 service are implemented and covered by DB integration tests. Live FCM delivery is
@@ -54,8 +66,8 @@ not verified; OpenRouter was smoke-tested, while production credentials for the
 other providers are not configured. See the phase table in [README.md](README.md).
 
 `src/db.ts` exports a single `PrismaClient` (cached on `globalThis` outside
-production) for the online process and for offline reuse through the workspace
-dependency. `src/middleware/auth.ts` verifies JWTs and loads a live
+production) for the online process. The offline service has its own `src/db.ts`
+using the same generated Prisma client. `src/middleware/auth.ts` verifies JWTs and loads a live
 `auth_sessions` row. `src/services/audit.ts` writes `audit_events`, including the
 `recordAiAudit()` helper used for AI actions.
 
@@ -70,6 +82,10 @@ An independent SMS/USSD service with two processes:
   callbacks.
 
 The HTTP process and worker share PostgreSQL and the same `.env`. Both must run.
+The HTTP process logs one structured `http_request` line per request with method,
+URL, status, duration and (subject to `LOG_HTTP_BODIES`) the callback body. The
+callback token path segment is always redacted; production defaults to redacted
+bodies because SMS/USSD bodies contain phone numbers and health text.
 
 Current implementation status: `src/repository.ts` uses the generated Prisma
 client and `src/db.ts`, applies the shared policy helpers, and uses
@@ -92,7 +108,7 @@ Prisma-managed database.
 
 ### Supporting services
 
-- Redis 7 - optional cache/session-adjacent infrastructure (`REDIS_URL`).
+- Redis 7 - included in the compose stack; optional for direct runs (`REDIS_URL`).
 - S3-compatible storage - avatars and symptom attachments, presigned URLs;
   MinIO is the local option.
 - Firebase Cloud Messaging - medication push reminders.
@@ -153,19 +169,77 @@ Implemented in `src/modules/portal/`, `src/domain/access.ts` and
   values. `access_attempts` records throttled/denied lookup attempts.
 
 Controllers resolve the patient from `req.auth`; they never accept a patient id
-from the request body. Directory reads are service-first and only approved
-facilities with approved facility-service links are eligible for a care match.
-Web leads remain unverified.
+from the request body. Directory reads are service-first and only approved,
+non-demo facilities with approved facility-service links are eligible for a
+verified care match. A live Serper supplement fills the remaining result slots
+with unverified web leads; web leads remain clearly labelled as unverified.
 
 ## AI behavior
 
 Status: `src/ai/` contains models, prompts, schemas, tools, agents and the
 medication adapter, and `src/modules/symptom/` exposes the chat, follow-up and
-attachment routes. The symptom tests inject a fake agent and pass 10/10. The
+attachment routes. The symptom tests inject a fake agent and pass 18/18. The
 LangGraph checkpointer schema `ai_agent_state` is pre-created and granted to the
 runtime role; `checkpointer.setup()` is skipped when it is already initialized.
 The offline service has a separate, smaller OpenRouter pipeline for SMS
 classification and reviewed/web answers.
+
+Symptom analysis also supports server-sent events at
+`POST /v1/symptom/stream` and `POST /v1/symptom/:id/follow-up/stream`. The routes
+emit `record`, `step` (agent tool start/completed/failed), `token` and `done`
+events, with `error` replacing `done` on failure. The stream is built from
+LangGraph `streamEvents` (`version: "v2"`) and uses the same checkpointer thread
+as the non-streaming route. Client disconnects abort the model call; attachments
+are cleaned up and a newly created record is deleted only if no token was sent.
+The web app consumes these streams token by token; the Next.js BFF passes
+`text/event-stream` responses through unbuffered and aborts upstream work when the
+browser disconnects.
+
+### One-code sharing
+
+- Viewers need exactly one code. `POST /v1/records/open { code }` accepts a
+  12-digit emergency (patient) code, which shows the emergency summary to any
+  signed-in user, or an 8-digit temporary code, which opens the granted fields
+  for verified practitioners. Spaces and dashes are ignored. `grant/open` no
+  longer needs the patient code; live temporary codes are unique across all
+  patients so the code alone identifies the patient.
+- `POST /v1/me/grants/quick` makes a one-tap temporary code (emergency summary,
+  or every filled emergency-eligible field) for web and USSD.
+- USSD menu: 1 Find care, 2 Open shared health info (either code in one box),
+  3 My access code (verified phones: shows the emergency code and can issue a
+  1-hour code), 4 Emergency help (area only, saved area offered).
+- SMS keeps the last 10 turns of conversation, encrypted at rest
+  (`historyEnvelope`, purpose `sms-history`) within the conversation TTL. Free
+  text goes through a conversation-aware AI router (`assistant-converse.txt`)
+  that can trigger emergency search, care search, a safe answer, or the
+  sender's code. Without AI it falls back to a plain-language numbered menu.
+  `CODE` and `NEW CODE` return the sender's own codes on a verified phone.
+
+### Personalisation
+
+- Patient-entered personal context lives in field definitions added by the
+  `personal_context_fields` migration: `city`, `state`, `country`,
+  `pregnancy_status`, `smoking_status`, `alcohol_use`, `activity_level`
+  (plus existing `gender`, `date_of_birth`, vitals, conditions, medications).
+  `PATCH /v1/me` accepts them (empty string clears a value) and
+  `preferredLanguage`; city/state are matched to a directory `Area` and stored
+  as the profile's `home_area_id`.
+- `src/ai/context.ts` builds a de-identified snapshot (age band, sex, pregnancy,
+  location, local emergency number, BMI, genotype, conditions, medications incl.
+  active schedules, allergies, lifestyle, recent symptom chats). When a chat has
+  `includeRecords`, the snapshot is embedded in the system prompt, which also
+  carries a triage/format guide, today's date and the preferred reply language.
+  No names, emails, phone numbers or codes are included.
+- `GET /v1/me/assistant-context` returns the snapshot and a completeness score
+  with the most useful missing items; the web assistant shows it and links to the
+  profile. New accounts are offered an optional, skippable setup wizard at
+  `/app/welcome`.
+- Offline: with a live profile-use consent for the sending phone, SMS `FIND` and
+  `EMERGENCY` (and USSD option `1. My area`) offer the patient's saved home area,
+  and `ASK` answers receive consent-scoped hints (age band, sex, pregnancy,
+  conditions, allergies, medications). Hints go to the model only, never to web
+  search or channel state, and each read is audited (`profile_area_read`,
+  `assistant_context_read`).
 
 - Agents: symptom chat (ReAct loop with conversation memory) and medication
   scheduling/addition.
@@ -247,9 +321,10 @@ keeps the same external behavior.
    acceptance succeeds.
 3. The worker claims one inbox job at a time per phone, decrypts the body, loads
    `sms_conversations` and processes the command.
-4. Deterministic commands (`HELP`, `FIND`, `LOOKUP`, `MORE`, `CANCEL`, `STOP`) do
-   not require AI. Natural-language classification and `ASK` may call OpenRouter
-   and Serper.
+4. Deterministic commands (`HELP`, `FIND`, `EMERGENCY`, `LOOKUP`, `MORE`,
+   `CANCEL`, `STOP`) do not require AI. Natural-language classification and `ASK`
+   may call OpenRouter and Serper. Care and emergency searches fall back to live
+   Serper Maps leads when the approved non-demo directory has no result.
 5. The final transaction rechecks ownership and conversation version, stores
    state and queues one or more `outbox` rows.
 6. The worker claims each outbox job, re-resolves the current authorized
@@ -274,7 +349,8 @@ SMS commands:
 | Input                         | Behavior                                              |
 | ----------------------------- | ----------------------------------------------------- |
 | `HELP`                        | Brief commands and channel notice                     |
-| `FIND <care> near <area>`     | Service/location resolution then directory search     |
+| `FIND <care> near <area>`     | Service/location resolution then directory/live search |
+| `EMERGENCY [near] <area>`     | Live emergency hospital/ambulance search, 112 guidance |
 | Natural-language care request | AI classification into the same care flow             |
 | `ASK <question>`              | Reviewed content first, else labeled web information  |
 | `LOOKUP <12-digit code>`      | Emergency summary only; no AI                         |
@@ -287,8 +363,10 @@ new request rather than interpreting a reply against stale health context.
 
 ## Offline USSD flow
 
-USSD is deterministic and never calls a model or web search. It uses approved
-directory data and the shared access policy only.
+USSD is deterministic and never calls a model. It uses approved non-demo
+directory data, the shared access policy, and a bounded Serper Maps fallback
+inside the callback process when the directory has no result. The fallback and
+emergency search are labelled unverified and never fabricated.
 
 Root menu:
 
@@ -297,8 +375,16 @@ HealthAccess
 1. Find nearby care
 2. Emergency summary
 3. View shared details
+4. Emergency help
 0. Exit
 ```
+
+Emergency help prompts for an area, searches `emergency hospital` and
+`ambulance service` in parallel, shows the nearest live name/address/phone with
+112 guidance, pages through up to eight leads, and records the request in
+`emergency_requests` on a best-effort basis. State is stored as `CARE_LOCATION`
+or `CARE_RESULTS` with `context.kind = emergency_area|emergency_results`; the
+Prisma `UssdState` enum stays unchanged.
 
 States persisted in `ussd_sessions.state`:
 

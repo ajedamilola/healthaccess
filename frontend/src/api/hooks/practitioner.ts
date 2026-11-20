@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { request } from "../client";
 import { qk } from "../keys";
 import {
+  openCodeResponseSchema,
+  type OpenCodeResponse,
   grantCloseResponseSchema,
   grantOpenBodySchema,
   grantProjectionSchema,
@@ -19,6 +21,15 @@ export function useOpenGrant() {
         { url: "/records/grant/open", method: "POST", data: grantOpenBodySchema.parse(body) },
         grantProjectionSchema,
       ),
+    gcTime: 0,
+  });
+}
+
+/** Open any shared-information code (12-digit emergency or 8-digit temporary). */
+export function useOpenCode() {
+  return useMutation({
+    mutationFn: (code: string) =>
+      request<OpenCodeResponse>({ url: "/records/open", method: "POST", data: { code } }, openCodeResponseSchema),
     gcTime: 0,
   });
 }

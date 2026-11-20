@@ -17,12 +17,12 @@ import {
   Share2,
   ShieldAlert,
   Stethoscope,
-  UserRound,
-} from "lucide-react";
+  UserRound, KeyRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { initialsAvatar } from "./avatar";
+import { useTheme } from "./useTheme";
 import styles from "./app-shell.module.css";
 
 const navItems = [
@@ -32,6 +32,7 @@ const navItems = [
   { href: "/app/record", label: "My record", icon: FileText },
   { href: "/app/emergency-summary", label: "Emergency summary", icon: ShieldAlert },
   { href: "/app/access", label: "Sharing and access", icon: Share2 },
+  { href: "/lookup", label: "Open a code", icon: KeyRound },
   { href: "/app/access-log", label: "Access log", icon: History },
   { href: "/app/channels", label: "Channels", icon: ClipboardList },
   { href: "/app/profile", label: "Profile", icon: UserRound },
@@ -77,6 +78,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
+  const { theme, setTheme } = useTheme();
   const { data: session, error, isLoading } = useSession();
   const logout = useLogout();
   const router = useRouter();
@@ -126,7 +128,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <p className={styles.sidebarLabel}>Practitioner</p>
             <Link className={styles.navLink} href="/practitioner/lookup">
               <Stethoscope aria-hidden="true" size={18} strokeWidth={1.75} />
-              <span>Practitioner lookup</span>
+              <span>Open a patient code</span>
             </Link>
           </div>
         ) : null}
@@ -171,7 +173,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               <UserMenu
                 user={{ name, email, avatarSrc: initialsAvatar(name) }}
                 showName
-                showTheme={false}
+                theme={theme}
+                onThemeChange={setTheme}
                 items={[
                   {
                     label: "Profile",

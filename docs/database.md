@@ -15,7 +15,7 @@ add tables or functions to it.
 
 `backend/online/scripts/grant-runtime.sql` is an optional operations helper, not
 a schema definition. It grants table/sequence DML in `public` to the
-`healthaccess_offline` and `healthaccess_online` logins if those roles exist, so
+`healthaccess_offline`, `healthaccess_online` and `healthaccess_web` logins if those roles exist, so
 dedicated runtime logins can connect. It never creates roles or passwords.
 Prisma remains the only object owner for schema changes.
 
@@ -27,10 +27,11 @@ from the authenticated route. Use a least-privilege runtime login that owns no
 schema objects.
 
 `backend/online/scripts/grant-runtime.sql` grants `SELECT, INSERT, UPDATE,
-DELETE` on `public` tables (and sequence usage) to `healthaccess_offline` and
-`healthaccess_online` when those roles exist. The current offline runtime uses a
-`healthaccess_offline` login with public CRUD and `ready()` is a connectivity
-probe, not a role-membership assertion. The LangGraph checkpointer schema
+DELETE` on `public` tables (and sequence usage) to `healthaccess_offline`,
+`healthaccess_online` and `healthaccess_web` when those roles exist. Outside the compose stack, the
+offline runtime can use a `healthaccess_offline` login with public CRUD; the
+included compose uses the `healthaccess` owner account. `ready()` is a
+connectivity probe, not a role-membership assertion. The LangGraph checkpointer schema
 `ai_agent_state` is outside Prisma and needs its own grants as described in
 [operations.md](operations.md).
 
@@ -38,8 +39,9 @@ The migration history currently contains:
 
 ```text
 backend/online/prisma/migrations/
-  20261117153100_init/migration.sql       48 tables and enum types
-  20261117153757_invariants/migration.sql CHECK constraints, partial indexes and retention defaults
+  20261117153100_init/migration.sql             48 tables and enum types
+  20261117153757_invariants/migration.sql       CHECK constraints, partial indexes and retention defaults
+  20261117230000_emergency_requests/migration.sql emergency request history and enums
   migration_lock.toml
 ```
 
@@ -50,7 +52,7 @@ Run these from the repository root unless noted.
 ```sh
 npm run db:generate                 # prisma generate
 npm run db:migrate                  # prisma migrate dev (development)
-npm run db:seed                     # reference data + demo fixtures
+npm run db:seed                     # reference data + sandbox patient
 
 cd backend/online
 npx prisma migrate deploy           # production-style migration
@@ -65,7 +67,7 @@ runs `prisma/seed.ts` with `tsx`.
 
 ## Table groups
 
-The initial migration creates 48 tables. All timestamps are `timestamptz(6)`.
+The migrations create 49 tables. All timestamps are `timestamptz(6)`.
 Ids are database-generated UUIDs (`gen_random_uuid()`) unless noted. Monetary and
 measurement values use `Decimal`.
 
@@ -212,6 +214,21 @@ measurement values use `Decimal`.
 - `referral_requests` / `referral_results` record a search, applied consent and
   field scope, ranked results and a facility snapshot.
 
+### Emergency requests
+
+`emergency_requests`
+
+- Created by the online `POST /v1/emergency` route and best-effort by the offline
+  SMS/USSD emergency flows.
+- Stores the requesting account/patient when available, channel (`WEB`, `SMS`,
+  `USSD`), search kind, optional area/coordinates, a capped location label, the
+  status (`SEARCHED`, `MATCHED`, `NO_MATCH`, `FAILED`) and a JSON snapshot of the
+  live Serper results.
+- The snapshot is contact information, not a verified facility record. It has no
+  foreign key to `facilities`; live results never become approved directory rows.
+- `request_id` supports idempotent/audit correlation; indexes cover account,
+  patient and channel history reads.
+
 ## Queue and concurrency rules
 
 - Queue claims use `FOR UPDATE SKIP LOCKED` with a lease (`lease_until`,
@@ -249,8 +266,8 @@ up keys separately from the database.
 
 ## Seeding and demo fixtures
 
-`backend/online/prisma/seed.ts` is idempotent and seeds reference data plus
-clearly labeled demo fixtures:
+`backend/online/prisma/seed.ts` is idempotent and seeds reference data plus an
+optional sandbox patient:
 
 - 15 field definitions: `full_name`, `date_of_birth`, `allergies`,
   `current_medications`, `conditions`, `blood_group`,
@@ -258,24 +275,25 @@ clearly labeled demo fixtures:
   `gender`, `blood_pressure`, `genotype`, `existing_conditions`,
   `existing_medications`.
 - 3 services: `general`, `pediatrics`, `maternity`.
-- Demo area `Ikeja` with fixed UUID `20000000-0000-4000-8000-000000000001`.
-- Demo facilities `Demo Community Hospital` and `Demo Child Health Clinic`
-  (fixed UUIDs `...0002` and `...0003`), both `APPROVED` and `is_demo`, with
-  approved `general` and `pediatrics` facility services.
+- Real area `Ikeja, Lagos` with fixed UUID
+  `20000000-0000-4000-8000-000000000001` and `is_demo = false`.
+- No demo facilities are created. The seed removes legacy fixtures with the
+  former demo UUIDs and any remaining `is_demo` facility in the Ikeja area.
+  Care results come from approved non-demo facilities and live Serper leads.
 - Demo account `demo.patient@example.test` (bcrypt cost 12, password
   `DemoPass123!`), patient profile `...0005`, patient code `123456789012`
   (HMAC digest plus AES-GCM ciphertext), five profile values and emergency
   fields for allergies and emergency contact.
 
 The seed requires `CODE_DIGEST_KEY` and `DATA_ENCRYPTION_KEY` to write the demo
-code. The credentials and code are fixtures only. Demo facilities stay
-`is_demo = true` and renderers must label them `DEMO`; never present them as an
-approved real directory.
+code. The credentials and code are fixtures only. Demo facilities are never
+created; any legacy `is_demo = true` facility is excluded from directory and
+care-search results.
 
 `backend/offline/scripts/seed-demo.ts` now uses the same Prisma schema and writes
-an equivalent demo set for offline sandbox testing. The online seed is the
-canonical setup step; do not run both in different databases and expect them to
-share data.
+the same reference area and demo patient for offline sandbox testing. The online
+seed is the canonical setup step; do not run both in different databases and
+expect them to share data.
 
 ## Schema change process
 

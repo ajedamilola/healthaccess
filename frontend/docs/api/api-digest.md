@@ -825,7 +825,7 @@ multipart/form-data. Creates a symptom record for the authenticated account's pa
 Responses:
 
 - **201 Created**: Stored symptom record plus the full AI thread (Human message and AI reply).  
-  `{"symptom":{"id":"ab143840-0058-4486-aa0d-2faf0c88121a","patient_id":"20000000-0000-4000-8000-000000000005","account_id":"20000000-0000-4000-8000-000000000004","name":"Mild headache and runny nose","severity":"MILD","summary":"Mild headache and runny nose for two days.","include_records":true,"modify_history":true,"files":[],"thread_id":"symptom_ab143840-0058-4486-aa0d-2faf0c88121a","model_version":"openrouter","created_at":"2026-11-17T16:13:58.179Z","updated_at":"2026-11-17T16:14:08.281Z"},"messages":[{"type":"Human","content":"I have had a mild headache and a runny nose for two days."},{"typ …`
+  `{"symptom":{"id":"ab143840-0058-4486-aa0d-2faf0c88121a","patient_id":"20000000-0000-4000-8000-000000000005","account_id":"20000000-0000-4000-8000-000000000004","name":"Mild headache and runny nose","severity":"MILD","summary":"Mild headache and runny nose for two days.","include_records":true,"modify_history":true,"language":"en","files":[],"thread_id":"symptom_ab143840-0058-4486-aa0d-2faf0c88121a","model_version":"openrouter","created_at":"2026-11-17T16:13:58.179Z","updated_at":"2026-11-17T16:14:08.281Z"},"messages":[{"type":"Human","content":"I have had a mild headache and a runny nose for two days."},{"typ …`
 - Note: Captured live: 201 in 15.8 s with model_version "openrouter" (server model openai/gpt-6-luna).
 - Note: messages is the whole thread on create: the Human message followed by the AI reply, which uses Markdown.
 - Note: files lists object-storage keys for attachments and is [] when none were sent.
@@ -845,7 +845,7 @@ Returns records scoped to the authenticated account, ordered by created_at desce
 Responses:
 
 - **200 OK**: Current page of symptom records.  
-  `{"symptoms":[{"id":"ab143840-0058-4486-aa0d-2faf0c88121a","patient_id":"20000000-0000-4000-8000-000000000005","account_id":"20000000-0000-4000-8000-000000000004","name":"Mild headache and runny nose","severity":"MILD","summary":"Mild headache and runny nose for two days.","include_records":true,"modify_history":true,"files":[],"thread_id":"symptom_ab143840-0058-4486-aa0d-2faf0c88121a","model_version":"openrouter","created_at":"2026-11-17T16:13:58.179Z","updated_at":"2026-11-17T16:14:08.281Z"}],"page":1,"limit":10,"total":1,"totalPages":1}`
+  `{"symptoms":[{"id":"ab143840-0058-4486-aa0d-2faf0c88121a","patient_id":"20000000-0000-4000-8000-000000000005","account_id":"20000000-0000-4000-8000-000000000004","name":"Mild headache and runny nose","severity":"MILD","summary":"Mild headache and runny nose for two days.","include_records":true,"modify_history":true,"language":"en","files":[],"thread_id":"symptom_ab143840-0058-4486-aa0d-2faf0c88121a","model_version":"openrouter","created_at":"2026-11-17T16:13:58.179Z","updated_at":"2026-11-17T16:14:08.281Z"}],"page":1,"limit":10,"total":1,"totalPages":1}`
 - **401 Unauthorized**: Captured with the Authorization header omitted.  
   `{"error":"unauthorized","message":"Authentication required","request_id":"275475e4-fa16-445b-b83c-a51a20db51b4"}`
 - Note: totalPages is 0 when total is 0.
@@ -864,7 +864,7 @@ Loads the record and its LangGraph thread history. A malformed uuid, an unknown 
 Responses:
 
 - **200 OK**: Record plus the stored conversation history.  
-  `{"symptom":{"id":"ab143840-0058-4486-aa0d-2faf0c88121a","patient_id":"20000000-0000-4000-8000-000000000005","account_id":"20000000-0000-4000-8000-000000000004","name":"Mild headache and runny nose","severity":"MILD","summary":"Mild headache and runny nose for two days.","include_records":true,"modify_history":true,"files":[],"thread_id":"symptom_ab143840-0058-4486-aa0d-2faf0c88121a","model_version":"openrouter","created_at":"2026-11-17T16:13:58.179Z","updated_at":"2026-11-17T16:14:08.281Z"},"messages":[{"type":"Human","content":"I have had a mild headache and a runny nose for two days."},{"typ …`
+  `{"symptom":{"id":"ab143840-0058-4486-aa0d-2faf0c88121a","patient_id":"20000000-0000-4000-8000-000000000005","account_id":"20000000-0000-4000-8000-000000000004","name":"Mild headache and runny nose","severity":"MILD","summary":"Mild headache and runny nose for two days.","include_records":true,"modify_history":true,"language":"en","files":[],"thread_id":"symptom_ab143840-0058-4486-aa0d-2faf0c88121a","model_version":"openrouter","created_at":"2026-11-17T16:13:58.179Z","updated_at":"2026-11-17T16:14:08.281Z"},"messages":[{"type":"Human","content":"I have had a mild headache and a runny nose for two days."},{"typ …`
 - **404 Not found**: Captured with a valid-format uuid that belongs to no record visible to this account.  
   `{"error":"not_found","message":"Symptom analysis record not found","request_id":"971444ac-d52b-423a-908d-23da8b683b5e"}`
 - Note: Non-uuid ids return the same 404 body as unknown ids rather than a 400.
@@ -885,7 +885,7 @@ Uses the record's stored includeRecords/modifyHistory settings and the same mult
 Responses:
 
 - **200 OK**: Updated record plus the last two thread messages.  
-  `{"symptom":{"id":"ab143840-0058-4486-aa0d-2faf0c88121a","patient_id":"20000000-0000-4000-8000-000000000005","account_id":"20000000-0000-4000-8000-000000000004","name":"Mild headache and runny nose","severity":"MILD","summary":"Mild headache and runny nose for two days; headache gets a little worse in the evening.","include_records":true,"modify_history":true,"files":[],"thread_id":"symptom_ab143840-0058-4486-aa0d-2faf0c88121a","model_version":"openrouter","created_at":"2026-11-17T16:13:58.179Z","updated_at":"2026-11-17T16:14:37.432Z"},"messages":[{"type":"Human","content":"Should I be worried  …`
+  `{"symptom":{"id":"ab143840-0058-4486-aa0d-2faf0c88121a","patient_id":"20000000-0000-4000-8000-000000000005","account_id":"20000000-0000-4000-8000-000000000004","name":"Mild headache and runny nose","severity":"MILD","summary":"Mild headache and runny nose for two days; headache gets a little worse in the evening.","include_records":true,"modify_history":true,"language":"en","files":[],"thread_id":"symptom_ab143840-0058-4486-aa0d-2faf0c88121a","model_version":"openrouter","created_at":"2026-11-17T16:13:58.179Z","updated_at":"2026-11-17T16:14:37.432Z"},"messages":[{"type":"Human","content":"Should I be worried  …`
 - Note: The agent may rewrite name, severity and summary; check symptom.updated_at.
 - Note: Unknown or foreign ids return 404 before any model call is made.
 - Note: Requires a configured AI provider; otherwise 503 ai_unavailable.
@@ -914,7 +914,7 @@ Body example:
 Responses:
 
 - **200 OK**: The updated symptom record.  
-  `{"symptom":{"id":"ab143840-0058-4486-aa0d-2faf0c88121a","patient_id":"20000000-0000-4000-8000-000000000005","account_id":"20000000-0000-4000-8000-000000000004","name":"Headache and runny nose (day 2)","severity":"MODERATE","summary":"Mild headache and runny nose for two days; headache gets a little worse in the evening.","include_records":true,"modify_history":true,"files":[],"thread_id":"symptom_ab143840-0058-4486-aa0d-2faf0c88121a","model_version":"openrouter","created_at":"2026-11-17T16:13:58.179Z","updated_at":"2026-11-17T16:14:44.689Z"}}`
+  `{"symptom":{"id":"ab143840-0058-4486-aa0d-2faf0c88121a","patient_id":"20000000-0000-4000-8000-000000000005","account_id":"20000000-0000-4000-8000-000000000004","name":"Headache and runny nose (day 2)","severity":"MODERATE","summary":"Mild headache and runny nose for two days; headache gets a little worse in the evening.","include_records":true,"modify_history":true,"language":"en","files":[],"thread_id":"symptom_ab143840-0058-4486-aa0d-2faf0c88121a","model_version":"openrouter","created_at":"2026-11-17T16:13:58.179Z","updated_at":"2026-11-17T16:14:44.689Z"}}`
 - Note: The literal legacy value "SEVERITY" is normalized to "SEVERE".
 - Note: Severity is stored uppercase as MILD, MODERATE or SEVERE.
 

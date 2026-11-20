@@ -37,7 +37,107 @@ function parseLimit(value: string | null) {
   return Number.isInteger(parsed) && parsed >= 1 ? Math.min(parsed, 100) : 10;
 }
 
+/** Build a text/event-stream response that emits each frame separately, like the real API. */
+export function sseResponse(frames: Array<[string, unknown]>, gapMs = 0) {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      controller.enqueue(encoder.encode(": ping\n\n"));
+      for (const [event, data] of frames) {
+        if (gapMs) await new Promise((resolve) => setTimeout(resolve, gapMs));
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      }
+      controller.close();
+    },
+  });
+  return new HttpResponse(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+/** Split a reply into word-sized token frames. */
+export function tokenFrames(text: string): Array<[string, unknown]> {
+  return (text.match(/\S+\s*/g) ?? [text]).map((content) => ["token", { content }]);
+}
+
 export const symptomHandlers = [
+    http.get("/api/v1/me/assistant-context", () =>
+      HttpResponse.json({
+        snapshot: {
+          ageYears: 34,
+          ageBand: "adult (18-39)",
+          sex: "Female",
+          pregnancyStatus: null,
+          location: { city: "Ikeja", state: "Lagos", country: "Nigeria", homeArea: "Ikeja" },
+          emergencyNumber: "112",
+          preferredLanguage: "en",
+          conditions: [],
+          medications: ["Paracetamol as needed"],
+          allergies: [{ name: "Penicillin", severity: "MODERATE" }],
+        },
+        language: "English",
+        completeness: {
+          score: 70,
+          missing: [{ key: "conditions", label: "Long-term conditions", reason: "Conditions change what is urgent." }],
+        },
+      }),
+    ),
+  http.post("/api/v1/symptom/stream", async ({ request }) => {
+    const form = await request.formData();
+    const message = String(form.get("message") ?? "").trim();
+    if (!message || message.length > 8000) {
+      return HttpResponse.json({ error: "validation_error" }, { status: 400 });
+    }
+    const id = nextId === 0 ? symptomCreate.symptom.id : `ab143840-0058-4486-aa0d-2faf0c8812${String(nextId).padStart(2, "0")}`;
+    nextId += 1;
+    const files = form.getAll("images").filter((value): value is File => value instanceof File);
+    const record: SymptomRecord = {
+      ...(symptomCreate.symptom as SymptomRecord),
+      id,
+      name: message.slice(0, 80),
+      summary: message.slice(0, 160),
+      include_records: String(form.get("includeRecords")) === "true",
+      modify_history: String(form.get("modifyHistory")) !== "false",
+      language: String(form.get("language") ?? "en"),
+      files: files.map((file) => `symptom/${id}/${file.name}`),
+      thread_id: `symptom_${id}`,
+    };
+    const reply = symptomCreate.messages[1]!.content;
+    const messages: SymptomMessage[] = [
+      { type: "Human", content: message },
+      { type: "AI", content: reply },
+    ];
+    entries = [{ record, messages }, ...entries];
+    return sseResponse([
+      ["record", { symptom: record }],
+      ["step", { id: "s1", name: "lookupPatientDetails", status: "started" }],
+      ["step", { id: "s1", name: "lookupPatientDetails", status: "completed" }],
+      ...tokenFrames(reply),
+      ["done", { symptom: record, messages }],
+    ]);
+  }),
+
+  http.post("/api/v1/symptom/:id/follow-up/stream", async ({ params, request }) => {
+    const id = String(params.id);
+    const entry = entries.find((candidate) => candidate.record.id === id);
+    if (!entry) {
+      return HttpResponse.json({ error: "not_found", message: "Symptom analysis record not found" }, { status: 404 });
+    }
+    const form = await request.formData();
+    const message = String(form.get("message") ?? "").trim();
+    const updated: SymptomRecord = {
+      ...entry.record,
+      summary: symptomFollowUp.symptom.summary,
+      updated_at: symptomFollowUp.symptom.updated_at,
+    };
+    const reply = symptomFollowUp.messages[1]!.content;
+    entry.record = updated;
+    entry.messages = [...entry.messages, { type: "Human", content: message }, { type: "AI", content: reply }];
+    return sseResponse([
+      ["record", { symptom: updated }],
+      ...tokenFrames(reply),
+      ["done", { symptom: updated, messages: entry.messages }],
+    ]);
+  }),
+
   http.get("/api/v1/symptom", ({ request }) => {
     const url = new URL(request.url);
     const page = parsePage(url.searchParams.get("page"));
@@ -81,6 +181,7 @@ export const symptomHandlers = [
       summary: message.slice(0, 160),
       include_records: String(form.get("includeRecords")) === "true",
       modify_history: String(form.get("modifyHistory")) !== "false",
+      language: String(form.get("language") ?? "en"),
       files: files.map((file) => `symptom/${id}/${file.name}`),
       thread_id: `symptom_${id}`,
     };

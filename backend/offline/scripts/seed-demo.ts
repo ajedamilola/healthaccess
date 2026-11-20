@@ -2,10 +2,10 @@ import { prismaFor } from '../src/db.js';
 import { loadConfig } from '../src/config.js';
 import { createCrypto } from '../src/security/crypto.js';
 
-// Clearly fictional fixtures for sandbox testing. Never use as production data.
+// Reference data plus a clearly labeled sandbox patient. The Ikeja area is a real
+// place and searchable; facilities now come from the approved directory or live
+// Serper results, never from seed fixtures.
 const areaId = '20000000-0000-4000-8000-000000000001';
-const hospitalId = '20000000-0000-4000-8000-000000000002';
-const childClinicId = '20000000-0000-4000-8000-000000000003';
 const patientAccountId = '20000000-0000-4000-8000-000000000004';
 const patientId = '20000000-0000-4000-8000-000000000005';
 const demoPatientCode = '123456789012';
@@ -52,59 +52,19 @@ try {
 
   await prisma.area.upsert({
     where: { id: areaId },
-    update: { name: 'Ikeja demo area', is_demo: true, active: true },
+    update: { name: 'Ikeja', is_demo: false, active: true },
     create: {
       id: areaId,
       country_code: 'NG',
       region: 'Lagos',
       city: 'Ikeja',
-      name: 'Ikeja demo area',
+      name: 'Ikeja',
       center_latitude: 6.6018,
       center_longitude: 3.3515,
-      is_demo: true,
+      is_demo: false,
       active: true,
     },
   });
-  for (const facility of [
-    {
-      id: hospitalId,
-      name: 'Demo Community Hospital',
-      address: '12 Example Road, Ikeja',
-    },
-    {
-      id: childClinicId,
-      name: 'Demo Child Health Clinic',
-      address: '8 Sample Street, Ikeja',
-    },
-  ]) {
-    await prisma.facility.upsert({
-      where: { id: facility.id },
-      update: { ...facility, status: 'APPROVED', is_demo: true, area_id: areaId },
-      create: {
-        ...facility,
-        area_id: areaId,
-        latitude: 6.602,
-        longitude: 3.352,
-        status: 'APPROVED',
-        is_demo: true,
-      },
-    });
-  }
-  for (const [facility_id, service_code] of [
-    [hospitalId, 'general'],
-    [childClinicId, 'pediatrics'],
-  ] as const) {
-    await prisma.facilityService.upsert({
-      where: { facility_id_service_code: { facility_id, service_code } },
-      update: { verification_status: 'APPROVED', verified_at: new Date() },
-      create: {
-        facility_id,
-        service_code,
-        verification_status: 'APPROVED',
-        verified_at: new Date(),
-      },
-    });
-  }
 
   await prisma.account.upsert({
     where: { id: patientAccountId },
@@ -164,8 +124,8 @@ try {
 
   console.log({
     seeded: true,
-    area: 'Ikeja demo area',
-    facilities: ['Demo Community Hospital', 'Demo Child Health Clinic'],
+    area: 'Ikeja',
+    facilities: [],
     demoPatientCode,
     emergencyFields: ['allergies', 'emergency_contact_name'],
   });

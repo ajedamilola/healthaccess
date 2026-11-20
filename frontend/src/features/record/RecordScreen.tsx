@@ -287,7 +287,9 @@ export function RecordScreen() {
 const FIELD_GROUPS = [
   { title: "Personal details", keys: ["full_name", "date_of_birth", "gender"] },
   { title: "Emergency contact", keys: ["emergency_contact_name", "emergency_contact_phone"] },
-  { title: "Vitals", keys: ["blood_group", "genotype", "blood_pressure", "weight", "height"] },
+  { title: "Vitals", keys: ["blood_group", "genotype", "blood_pressure", "weight", "height", "pregnancy_status"] },
+  { title: "Location", keys: ["city", "state", "country"] },
+  { title: "Lifestyle", keys: ["smoking_status", "alcohol_use", "activity_level"] },
 ];
 
 function groupFields(fields: FieldDefinition[]) {

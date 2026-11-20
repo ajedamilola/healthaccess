@@ -14,6 +14,7 @@ const MAX_PHONE_LENGTH = 40;
 const MAX_REFERENCE_LENGTH = 300;
 const SEARCH_RESULT_LIMIT = 8;
 const FACILITY_RESULT_LIMIT = 8;
+const EMERGENCY_RESULT_LIMIT = 8;
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
 
@@ -38,9 +39,15 @@ export interface FacilitySearch {
   area: string;
 }
 
+export interface EmergencySearch {
+  area: string;
+  description?: string;
+}
+
 export interface WebSearch {
   searchHealth(query: string): Promise<Source[]>;
   discoverFacilities(input: FacilitySearch): Promise<FacilityLead[]>;
+  discoverEmergency(input: EmergencySearch): Promise<FacilityLead[]>;
 }
 
 export interface FetchResponseBody {
@@ -461,5 +468,58 @@ export function createWebSearch(
     return leads;
   }
 
-  return { searchHealth, discoverFacilities };
+  async function discoverEmergency({
+    area,
+    description,
+  }: EmergencySearch): Promise<FacilityLead[]> {
+    const place = cleanText(area, 80);
+    if (!place || !hasLetter(place)) return [];
+    const emergency = cleanText(description, 80);
+    const queries: Array<{ query: string; label: string }> = [
+      {
+        query: `${emergency ? `${emergency} ` : ''}emergency hospital`,
+        label: 'Emergency hospital',
+      },
+      {
+        query: `${emergency ? `${emergency} ` : ''}ambulance service`,
+        label: 'Ambulance service',
+      },
+    ];
+    const leads: FacilityLead[] = [];
+    const seen = new Set<string>();
+    // Run both Maps queries concurrently so a slow provider does not double the
+    // USSD/SMS callback latency; merge in fixed query order for determinism.
+    const responses = await Promise.all(
+      queries.map((entry) => {
+        const q = minimizeQuery(`${entry.query} in ${place}`);
+        return q
+          ? request(MAPS_ENDPOINT, {
+              q,
+              gl: settings.country,
+              hl: settings.locale,
+            })
+          : Promise.resolve(null);
+      }),
+    );
+    for (const [position, entry] of queries.entries()) {
+      if (leads.length >= EMERGENCY_RESULT_LIMIT) break;
+      const data = responses[position];
+      if (!isRecord(data)) continue;
+      const places = Array.isArray(data.places)
+        ? data.places
+        : Array.isArray(data.localResults)
+          ? data.localResults
+          : [];
+      for (const placeResult of places) {
+        if (leads.length >= EMERGENCY_RESULT_LIMIT) break;
+        const lead = mapFacility(placeResult, entry.label);
+        if (!lead || seen.has(lead.source_reference)) continue;
+        seen.add(lead.source_reference);
+        leads.push(lead);
+      }
+    }
+    return leads;
+  }
+
+  return { searchHealth, discoverFacilities, discoverEmergency };
 }

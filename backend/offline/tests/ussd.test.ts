@@ -6,9 +6,10 @@ import type {
   UssdEngine,
   UssdRepository,
   UssdResult,
+  UssdSearch,
   UssdSession,
 } from '../src/channels/ussd.js';
-import type { Area, Facility, Projection, Service } from '../src/types.js';
+import type { Area, Facility, Projection, Service, WebLead } from '../src/types.js';
 
 const services: Service[] = [
   { service_code: 'general', label: 'General care' },
@@ -24,6 +25,20 @@ function facility(
   phone: string | null = '+2348000000000',
 ): Facility {
   return { id, name, address: `${id} Example Road, Ikeja`, phone, distance_km: 2.4 };
+}
+
+function lead(id: string): WebLead {
+  return {
+    name: id === 'lead1' ? 'Live Care Clinic' : `Live Lead ${id}`,
+    address: `${id} Broad Street, Lagos`,
+    phone: '+2349091481560',
+    latitude: null,
+    longitude: null,
+    source_url: `https://maps.google.com/?cid=${id}`,
+    source_reference: id,
+    verification_status: 'unverified',
+    service_label: 'Emergency hospital',
+  };
 }
 
 function projection(fields: Projection['fields']): Projection {
@@ -51,6 +66,7 @@ function config(profileUseEnabled = false) {
     searchRadiusKm: 25,
     searchMaxRadiusKm: 100,
     profileUseEnabled,
+    allowLiveWeb: true,
   };
 }
 
@@ -58,6 +74,7 @@ function setup(
   overrides: Partial<UssdRepository> = {},
   profileUseEnabled = false,
   cryptoOverrides: Partial<UssdCrypto> = {},
+  search?: UssdSearch,
 ) {
   const calls: string[] = [];
   const repository: UssdRepository = {
@@ -82,6 +99,11 @@ function setup(
       calls.push(`sms:${id}`);
       return true;
     },
+    storeWebLeads: async () => ['lead1'],
+    getWebLead: async (id) => lead(id),
+    recordEmergencyRequest: async (request) => {
+      calls.push(`emergency:${request.channel}:${request.location_text}:${request.results.length}`);
+    },
     ...overrides,
   };
   const engine = createUssdEngine({
@@ -92,6 +114,7 @@ function setup(
       fingerprint: (value) => `view-${value.length}`,
       ...cryptoOverrides,
     },
+    search,
   });
   return { engine, repository, calls };
 }
@@ -310,11 +333,11 @@ test('emergency summary uses a digest only and reauthorizes on replay', async ()
   revoked = true;
   const replay = await engine.replay(summary.session);
   assert.equal(replay.state, 'END');
-  assert.match(replay.response, /Emergency summary unavailable/);
+  assert.match(replay.response, /That code did not work/);
   assert.equal(JSON.stringify(replay.context).includes('Penicillin'), false);
 });
 
-test('grant uses both digests, rechecks every page and closes on exit', async () => {
+test('one temporary code opens shared details, rechecks every page and closes on exit', async () => {
   const opened: string[] = [];
   let reads = 0;
   const medications = Array.from(
@@ -335,8 +358,8 @@ test('grant uses both digests, rechecks every page and closes on exit', async ()
     },
   });
 
-  const reached = await walk(engine, ['3', '123456789012', '12345678']);
-  assert.deepEqual(opened, ['patient-digest:grant-digest']);
+  const reached = await walk(engine, ['2', '1234 5678']);
+  assert.deepEqual(opened, ['null:grant-digest']);
   assert.equal(reached.result.sensitive, true);
   assert.equal(reached.result.readSessionId, 'read1');
   assert.equal(reached.result.state, 'RECORD_PAGE');
@@ -392,7 +415,7 @@ test('long scalar and array fields paginate without omission', async () => {
     readGrant: async () =>
       projection([{ key: 'current_medications', label: 'Medications', value: items }]),
   }).engine;
-  const array = await walk(arrayEngine, ['3', '123456789012', '12345678']);
+  const array = await walk(arrayEngine, ['2', '12345678']);
   current = array.session;
   const arrayPages = [array.result.response];
   for (let page = 0; page < 20 && current.state !== 'END'; page += 1) {
@@ -485,7 +508,7 @@ test('replay of a terminal protected page reauthorizes and does not reuse cached
     },
   });
 
-  const reached = await walk(engine, ['3', '123456789012', '12345678']);
+  const reached = await walk(engine, ['2', '12345678']);
   assert.equal(reached.result.state, 'END');
   assert.equal(reached.result.sensitive, true);
   const firstReads = reads;
@@ -498,7 +521,256 @@ test('replay of a terminal protected page reauthorizes and does not reuse cached
   revoked = true;
   const denied = await engine.replay(reached.session);
   assert.equal(denied.state, 'END');
-  assert.match(denied.response, /Shared details are no longer available/);
+  assert.match(denied.response, /That code did not work/);
   assert.equal(denied.sensitive, false);
   assert.ok(calls.includes('close:read1'));
+});
+
+test('main menu offers emergency help, pages live leads, records USSD request and never fabricates', async () => {
+  const leads = [lead('lead1'), lead('lead2')];
+  const areasQueried: string[] = [];
+  const descriptions: string[] = [];
+  const { engine, calls } = setup(
+    {
+      storeWebLeads: async () => ['lead1', 'lead2'],
+      getWebLead: async (id) => leads.find((item) => item.source_reference === id) ?? null,
+    },
+    false,
+    {},
+    {
+      discoverFacilities: async () => [],
+      discoverEmergency: async ({ area, description }) => {
+        areasQueried.push(area);
+        descriptions.push(description ?? '');
+        return leads;
+      },
+    },
+  );
+
+  const initial = await engine.transition(session(), null);
+  assert.match(initial.response, /4\. Emergency help/);
+  const locationPrompt = await send(engine, apply(session(), initial), '4');
+  assert.equal(locationPrompt.result.state, 'CARE_LOCATION');
+  assert.equal(locationPrompt.result.context.kind, 'emergency_area');
+  assert.match(locationPrompt.result.response, /Call 112 now if life-threatening/);
+  assert.match(locationPrompt.result.response, /Enter your area or landmark/);
+  assertResponse(locationPrompt.result);
+
+  const first = await send(engine, locationPrompt.session, 'Ikeja');
+  assert.equal(first.result.state, 'CARE_RESULTS');
+  assert.equal(first.result.context.kind, 'emergency_results');
+  assert.match(first.result.response, /Call 112 now if life-threatening/);
+  assert.match(first.result.response, /Unverified live lead 1\/2/);
+  assert.match(first.result.response, /Live Care Clinic/);
+  assert.match(first.result.response, /lead1 Broad Street, Lagos/);
+  assert.match(first.result.response, /\+2349091481560/);
+  assert.match(first.result.response, /1\. Next/);
+  assert.match(first.result.response, /0\. Exit/);
+  assertResponse(first.result);
+  assert.deepEqual(areasQueried, ['Ikeja']);
+  assert.deepEqual(descriptions, ['']);
+  assert.ok(calls.includes('emergency:USSD:Ikeja:2'));
+
+  const second = await send(engine, first.session, '1');
+  assert.equal(second.result.state, 'CARE_RESULTS');
+  assert.match(second.result.response, /Unverified live lead 2\/2/);
+  assert.match(second.result.response, /Live Lead lead2/);
+  assert.match(second.result.response, /1\. Another area/);
+  assertResponse(second.result);
+
+  const again = await send(engine, second.session, '1');
+  assert.equal(again.result.state, 'CARE_LOCATION');
+  assert.equal(again.result.context.kind, 'emergency_area');
+
+});
+
+test('emergency with no live results gives 112 guidance and records an empty request', async () => {
+  const { engine, calls } = setup(
+    { storeWebLeads: async () => [], getWebLead: async () => null },
+    false,
+    {},
+    { discoverFacilities: async () => [], discoverEmergency: async () => [] },
+  );
+  const result = await walk(engine, ['4', 'Ikeja']);
+  assert.equal(result.result.state, 'END');
+  assert.equal(result.result.terminal, true);
+  assert.match(result.result.response, /Call 112 now/);
+  assert.match(result.result.response, /nearest emergency department/);
+  assert.doesNotMatch(result.result.response, /CON /);
+  assert.ok(calls.includes('emergency:USSD:Ikeja:0'));
+});
+
+test('emergency help asks only for the area, supports back and rejects empty input', async () => {
+  const { engine } = setup();
+  const initial = await engine.transition(session(), null);
+  const prompt = await send(engine, apply(session(), initial), '4');
+  const invalid = await send(engine, prompt.session, '');
+  assert.equal(invalid.result.state, 'CARE_LOCATION');
+  assert.equal(invalid.result.context.kind, 'emergency_area');
+  assert.match(invalid.result.response, /Enter your area or landmark/);
+
+  const back = await send(engine, prompt.session, '0');
+  assert.equal(back.result.state, 'MAIN');
+
+  const replay = await engine.render(prompt.session);
+  assert.equal(replay.state, 'CARE_LOCATION');
+  assert.match(replay.response, /Enter your area or landmark/);
+});
+
+test('care search falls back to unverified live leads when the directory is empty', async () => {
+  const areasQueried: string[] = [];
+  const { engine } = setup(
+    {
+      findFacilities: async () => [],
+      storeWebLeads: async () => ['lead1'],
+      getWebLead: async () => lead('lead1'),
+    },
+    false,
+    {},
+    {
+      discoverFacilities: async ({ serviceLabel, area }) => {
+        areasQueried.push(`${serviceLabel}:${area}`);
+        return [lead('lead1')];
+      },
+    },
+  );
+  const result = await walk(engine, ['1', '1', 'Ikeja']);
+  assert.equal(result.result.state, 'CARE_RESULTS');
+  assert.equal(result.result.context.resultKind, 'web');
+  assert.match(result.result.response, /Unverified live lead: Live Care Clinic/);
+  assert.match(result.result.response, /1\. Another area/);
+  assert.doesNotMatch(result.result.response, /Send details by SMS/);
+  assert.deepEqual(areasQueried, ['General care:Ikeja, Lagos']);
+});
+
+test('care search uses live leads when no directory area matches', async () => {
+  const { engine } = setup(
+    {
+      findAreas: async () => [],
+      findFacilities: async () => [],
+      storeWebLeads: async () => ['lead1'],
+      getWebLead: async () => lead('lead1'),
+    },
+    false,
+    {},
+    { discoverFacilities: async () => [lead('lead1')] },
+  );
+  const result = await walk(engine, ['1', '1', 'Agege']);
+  assert.equal(result.result.state, 'CARE_RESULTS');
+  assert.equal(result.result.context.resultKind, 'web');
+  assert.match(result.result.response, /Unverified live lead/);
+});
+
+test('care location offers the saved home area as option 1', async () => {
+  const searched: string[] = [];
+  const { engine } = setup({
+    findSavedArea: async () => ({ id: 'home', label: 'Ikeja, Lagos' }),
+    findFacilities: async (_service, areaId) => {
+      searched.push(areaId);
+      return [facility('f1')];
+    },
+  });
+  const prompt = await walk(engine, ['1', '2']);
+  assert.equal(prompt.result.state, 'CARE_LOCATION');
+  assert.match(prompt.result.response, /1\. My area: Ikeja, Lagos\n0\. Back$/);
+  const found = await send(engine, prompt.session, '1');
+  assertResponse(found.result);
+  assert.equal(found.result.state, 'CARE_RESULTS');
+  assert.deepEqual(searched, ['home']);
+});
+
+test('care location without a saved area keeps the plain prompt', async () => {
+  const { engine } = setup();
+  const prompt = await walk(engine, ['1', '2']);
+  assert.equal(prompt.result.response, 'CON Enter area or landmark\n0. Back');
+});
+
+test('emergency help can use the saved area for live search', async () => {
+  const areasSearched: string[] = [];
+  const { engine } = setup(
+    { findSavedArea: async () => ({ id: 'home', label: 'Ikeja, Lagos' }) },
+    false,
+    {},
+    {
+      discoverFacilities: async () => [],
+      discoverEmergency: async ({ area }) => {
+        areasSearched.push(area);
+        return [lead('lead1')];
+      },
+    },
+  );
+  const prompt = await walk(engine, ['4']);
+  assert.match(prompt.result.response, /1\. My area: Ikeja, Lagos/);
+  const found = await send(engine, prompt.session, '1');
+  assertResponse(found.result);
+  assert.deepEqual(areasSearched, ['Ikeja, Lagos']);
+});
+
+test('my access code shows the emergency code to a linked phone and issues a 1-hour code', async () => {
+  let created = 0;
+  const { engine } = setup({
+    readOwnCodes: async () => ({ linked: true, patientCode: '123456789012' }),
+    createQuickGrant: async () => {
+      created += 1;
+      return { status: 'created', code: '87654321', expiresAt: new Date(Date.now() + 3600_000) };
+    },
+  });
+  const menu = await walk(engine, ['3']);
+  assert.equal(menu.result.state, 'MY_CODE');
+  assert.equal(menu.result.sensitive, true);
+  assert.match(menu.result.response, /1234 5678 9012/);
+  assert.equal(JSON.stringify(menu.result.context).includes('123456789012'), false);
+
+  const code = await send(engine, menu.session, '1');
+  assertResponse(code.result);
+  assert.equal(code.result.state, 'END');
+  assert.equal(code.result.sensitive, true);
+  assert.match(code.result.response, /8765 4321/);
+  assert.equal(JSON.stringify(code.result.context).includes('87654321'), false);
+  assert.equal(created, 1);
+});
+
+test('my access code explains how to link an unlinked phone', async () => {
+  const { engine } = setup({ readOwnCodes: async () => ({ linked: false }) });
+  const result = await walk(engine, ['3']);
+  assert.equal(result.result.state, 'END');
+  assert.match(result.result.response, /not linked/);
+});
+
+test('invalid service choice repeats readable labels, not internal codes', async () => {
+  const { engine } = setup();
+  const result = await walk(engine, ['1', '9']);
+  assert.match(result.result.response, /1\. General care/);
+  assert.doesNotMatch(result.result.response, /1\. general\b/);
+});
+
+test('USSD menus in every language are plain ASCII and fit the screen', async () => {
+  const { u, USSD_LANGUAGE_ORDER } = await import('../src/channels/i18n.js');
+  for (const locale of USSD_LANGUAGE_ORDER) {
+    for (const key of ['main', 'location', 'emergencyLocation', 'code', 'back', 'myArea', 'invalid', 'language', 'chooseService']) {
+      const text = `CON ${u(locale, key)}`;
+      assert.ok(text.length <= 182, `${locale}.${key} is ${text.length} chars`);
+      assert.match(text, /^[\x20-\x7e\n]+$/, `${locale}.${key} must be ASCII`);
+    }
+  }
+});
+
+test('USSD language option switches menus and remembers the choice', async () => {
+  const saved: string[] = [];
+  const { engine } = setup({ setLocale: async (locale) => void saved.push(locale) });
+  const menu = await walk(engine, ['5']);
+  assert.match(menu.result.response, /3\. Yoruba/);
+  const chosen = await send(engine, menu.session, '3');
+  assertResponse(chosen.result);
+  assert.match(chosen.result.response, /Wa ile iwosan nitosi/);
+  assert.deepEqual(saved, ['yo']);
+  const location = await send(engine, chosen.session, '1');
+  assert.match(location.result.response, /Yan itoju/);
+});
+
+test('USSD opens in the phone or profile language', async () => {
+  const { engine } = setup({ getLocale: async () => 'ha' });
+  const start = await engine.transition(session(), null);
+  assert.match(start.response, /Nemi asibiti kusa/);
+  assert.equal(start.context.locale, 'ha');
 });

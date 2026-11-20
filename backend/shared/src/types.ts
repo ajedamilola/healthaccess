@@ -56,6 +56,13 @@ export type SmsReply =
       serviceCode?: string;
       areaId?: string | null;
       radiusKm?: number;
+      /** Position in the result list, for "Option 1 of 3". */
+      index?: number;
+      total?: number;
+      /** Emergency search results get emergency wording. */
+      emergency?: boolean;
+      /** Language for the listing text (en, pcm, yo, ha, ig). */
+      locale?: string;
     };
 
 export interface SmsContext {
@@ -67,6 +74,14 @@ export interface SmsContext {
   resultIds?: string[];
   resultIndex?: number;
   resultKind?: 'directory' | 'web';
+  /** Patient's saved home area, offered when no area was given. */
+  suggestedAreaId?: string;
+  suggestedAreaLabel?: string;
+  /** Recent turns for conversational memory (encrypted at rest by the repository). */
+  history?: Array<{ role: 'user' | 'assistant'; text: string }>;
+  /** Language for this thread (en, pcm, yo, ha, ig). */
+  locale?: string;
+  historyEnvelope?: string;
 }
 
 export interface SmsConversation {

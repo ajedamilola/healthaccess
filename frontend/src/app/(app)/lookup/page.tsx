@@ -1,7 +1,7 @@
-import { EmergencyLookupScreen } from "@/features/sharing/EmergencyLookupScreen";
+import { OpenCodeScreen } from "@/features/sharing/OpenCodeScreen";
 
-export const metadata = { title: "Emergency lookup · HealthAccess" };
+export const metadata = { title: "Open shared health info · HealthAccess" };
 
-export default function LookupPage() {
-  return <EmergencyLookupScreen />;
+export default function Page() {
+  return <OpenCodeScreen />;
 }

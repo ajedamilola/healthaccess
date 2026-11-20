@@ -2847,6 +2847,12 @@
        "description": "Allow the agent to update the stored name, severity and summary. Default true."
       },
       {
+       "name": "language",
+       "type": "string",
+       "required": false,
+       "description": "Language code for this conversation (for example en, pcm, yo, ha, ig). Defaults to the profile's preferred language, then en."
+      },
+      {
        "name": "images",
        "type": "file[]",
        "required": false,
@@ -2871,6 +2877,7 @@
          "summary": "Mild headache and runny nose for two days.",
          "include_records": true,
          "modify_history": true,
+         "language": "en",
          "files": [],
          "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
          "model_version": "openrouter",
@@ -2884,7 +2891,7 @@
          },
          {
           "type": "AI",
-          "content": "A mild headache with a runny nose for two days is often due to a common viral infection, though other causes are possible.\n\n- Rest, drink fluids, and try saline nasal spray or a humidifier.\n- For the headache, you can consider an over-the-counter pain reliever if it\u2019s normally safe for you; follow the label and check with a pharmacist if you\u2019re unsure whether it\u2019s suitable with your medicines or allergies.\n- Consider a COVID test, especially if you\u2019ve had an exposure or will be around someone at higher risk.\n\nSeek urgent care for a sudden or severe headache, confusion, weakness, stiff neck, trouble breathing, or other rapidly worsening symptoms. Contact a healthcare professional if symptoms worsen or aren\u2019t improving after about 10 days."
+          "content": "A mild headache with a runny nose for two days is often due to a common viral infection, though other causes are possible.\n\n- Rest, drink fluids, and try saline nasal spray or a humidifier.\n- For the headache, you can consider an over-the-counter pain reliever if it’s normally safe for you; follow the label and check with a pharmacist if you’re unsure whether it’s suitable with your medicines or allergies.\n- Consider a COVID test, especially if you’ve had an exposure or will be around someone at higher risk.\n\nSeek urgent care for a sudden or severe headache, confusion, weakness, stiff neck, trouble breathing, or other rapidly worsening symptoms. Contact a healthcare professional if symptoms worsen or aren’t improving after about 10 days."
          }
         ]
        }
@@ -2946,6 +2953,7 @@
           "summary": "Mild headache and runny nose for two days.",
           "include_records": true,
           "modify_history": true,
+          "language": "en",
           "files": [],
           "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
           "model_version": "openrouter",
@@ -3018,6 +3026,7 @@
          "summary": "Mild headache and runny nose for two days.",
          "include_records": true,
          "modify_history": true,
+         "language": "en",
          "files": [],
          "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
          "model_version": "openrouter",
@@ -3031,7 +3040,7 @@
          },
          {
           "type": "AI",
-          "content": "A mild headache with a runny nose for two days is often due to a common viral infection, though other causes are possible.\n\n- Rest, drink fluids, and try saline nasal spray or a humidifier.\n- For the headache, you can consider an over-the-counter pain reliever if it\u2019s normally safe for you; follow the label and check with a pharmacist if you\u2019re unsure whether it\u2019s suitable with your medicines or allergies.\n- Consider a COVID test, especially if you\u2019ve had an exposure or will be around someone at higher risk.\n\nSeek urgent care for a sudden or severe headache, confusion, weakness, stiff neck, trouble breathing, or other rapidly worsening symptoms. Contact a healthcare professional if symptoms worsen or aren\u2019t improving after about 10 days."
+          "content": "A mild headache with a runny nose for two days is often due to a common viral infection, though other causes are possible.\n\n- Rest, drink fluids, and try saline nasal spray or a humidifier.\n- For the headache, you can consider an over-the-counter pain reliever if it’s normally safe for you; follow the label and check with a pharmacist if you’re unsure whether it’s suitable with your medicines or allergies.\n- Consider a COVID test, especially if you’ve had an exposure or will be around someone at higher risk.\n\nSeek urgent care for a sudden or severe headache, confusion, weakness, stiff neck, trouble breathing, or other rapidly worsening symptoms. Contact a healthcare professional if symptoms worsen or aren’t improving after about 10 days."
          }
         ]
        }
@@ -3108,6 +3117,7 @@
          "summary": "Mild headache and runny nose for two days; headache gets a little worse in the evening.",
          "include_records": true,
          "modify_history": true,
+         "language": "en",
          "files": [],
          "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
          "model_version": "openrouter",
@@ -3121,7 +3131,7 @@
          },
          {
           "type": "AI",
-          "content": "A slight increase in the evening **isn\u2019t necessarily a reason to worry**. Tiredness, not drinking enough, or nasal congestion can make a mild headache feel more noticeable later in the day.\n\nTry drinking fluids, resting, and using saline spray; notice whether anything seems to trigger or relieve it. Seek urgent care for a sudden or severe headache, confusion, weakness or numbness, vision changes, a stiff neck with fever, or repeated vomiting. If it keeps worsening or isn\u2019t improving over the next several days, contact a healthcare professional."
+          "content": "A slight increase in the evening **isn’t necessarily a reason to worry**. Tiredness, not drinking enough, or nasal congestion can make a mild headache feel more noticeable later in the day.\n\nTry drinking fluids, resting, and using saline spray; notice whether anything seems to trigger or relieve it. Seek urgent care for a sudden or severe headache, confusion, weakness or numbness, vision changes, a stiff neck with fever, or repeated vomiting. If it keeps worsening or isn’t improving over the next several days, contact a healthcare professional."
          }
         ]
        }
@@ -3189,6 +3199,7 @@
          "summary": "Mild headache and runny nose for two days; headache gets a little worse in the evening.",
          "include_records": true,
          "modify_history": true,
+         "language": "en",
          "files": [],
          "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
          "model_version": "openrouter",

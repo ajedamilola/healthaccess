@@ -48,6 +48,17 @@ export const patientProfileSchema = z
     id: idSchema,
     preferred_language: z.string().min(1),
     home_area_id: idSchema.nullable(),
+    home_area: z
+      .object({
+        id: idSchema,
+        name: z.string(),
+        city: z.string(),
+        region: z.string(),
+        country_code: z.string(),
+      })
+      .loose()
+      .nullable()
+      .optional(),
     version: z.number().int().nonnegative(),
     created_at: timestampSchema,
     updated_at: timestampSchema,
@@ -81,6 +92,12 @@ export const patchMeBodySchema = z
     city: z.string().optional(),
     state: z.string().optional(),
     country: z.string().optional(),
+    gender: z.string().max(200).optional(),
+    pregnancyStatus: z.string().max(200).optional(),
+    smokingStatus: z.string().max(200).optional(),
+    alcoholUse: z.string().max(200).optional(),
+    activityLevel: z.string().max(200).optional(),
+    preferredLanguage: z.string().max(16).optional(),
     password: z.string().min(8).max(128).optional(),
   })
   .loose();
@@ -135,3 +152,39 @@ export const medicalEventResponseSchema = z
     event: medicalEventSchema,
   })
   .loose();
+
+export const assistantContextSchema = z
+  .object({
+    snapshot: z
+      .object({
+        ageYears: z.number().nullable(),
+        ageBand: z.string().nullable(),
+        sex: z.string().nullable(),
+        pregnancyStatus: z.string().nullable(),
+        location: z
+          .object({
+            city: z.string().nullable(),
+            state: z.string().nullable(),
+            country: z.string().nullable(),
+            homeArea: z.string().nullable(),
+          })
+          .loose(),
+        emergencyNumber: z.string(),
+        preferredLanguage: z.string(),
+        conditions: z.array(z.string()),
+        medications: z.array(z.string()),
+        allergies: z.array(z.object({ name: z.string(), severity: z.string() }).loose()),
+      })
+      .loose()
+      .nullable(),
+    language: z.string(),
+    completeness: z
+      .object({
+        score: z.number().min(0).max(100),
+        missing: z.array(z.object({ key: z.string(), label: z.string(), reason: z.string() }).loose()),
+      })
+      .loose(),
+  })
+  .loose();
+
+export type AssistantContext = z.infer<typeof assistantContextSchema>;

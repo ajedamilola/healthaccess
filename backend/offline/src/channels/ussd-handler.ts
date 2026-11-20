@@ -2,7 +2,7 @@ import type { Config } from '../config.js';
 import type { Crypto } from '../security/crypto.js';
 import type { Repository } from '../repository.js';
 import type { UssdCallback } from '../app.js';
-import type { createUssdEngine } from './ussd.js';
+import type { createUssdEngine, UssdSearch } from './ussd.js';
 
 const EXPIRED = 'END Session ended or expired. Please redial.';
 
@@ -23,11 +23,13 @@ export function createUssdHandler({
   crypto,
   createEngine,
   config,
+  search,
 }: {
   repository: Pick<Repository, 'withUssdSession'>;
   crypto: Pick<Crypto, 'digestPhone' | 'fingerprint' | 'digestCode'>;
   createEngine: typeof createUssdEngine;
   config: Config;
+  search?: UssdSearch;
 }) {
   return async (body: UssdCallback, requestId: string) => {
     let tokens;
@@ -54,7 +56,7 @@ export function createUssdHandler({
       const initial = session.inputDepth === -1 && depth === 0;
       if (!same && !next && !initial) return EXPIRED;
       if (session.state === 'END' && !same) return EXPIRED;
-      const engine = createEngine({ repository: scopedRepository, config, crypto });
+      const engine = createEngine({ repository: scopedRepository, config, crypto, search });
       const result = same
         ? await engine.replay(session)
         : await engine.transition(session, initial ? null : tokens[depth - 1]);

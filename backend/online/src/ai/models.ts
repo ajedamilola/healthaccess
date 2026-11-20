@@ -31,6 +31,7 @@ const definitions: Record<ModelName, ModelDefinition> = {
       new ChatOpenAI({
         apiKey: config.ai.openrouter,
         model: config.ai.openrouterModel,
+        temperature: 0.3,
         maxRetries: 7,
         configuration: {
           baseURL: 'https://openrouter.ai/api/v1',
@@ -47,6 +48,7 @@ const definitions: Record<ModelName, ModelDefinition> = {
       new ChatDeepSeek({
         apiKey: config.ai.deepseek,
         model: 'deepseek-chat',
+        temperature: 0.3,
         maxRetries: 7,
       }),
   },
@@ -56,7 +58,7 @@ const definitions: Record<ModelName, ModelDefinition> = {
       new ChatGoogleGenerativeAI({
         apiKey: config.ai.google,
         model: 'gemini-2.0-flash',
-        temperature: 2,
+        temperature: 0.3,
         maxRetries: 7,
       }),
   },
@@ -66,7 +68,7 @@ const definitions: Record<ModelName, ModelDefinition> = {
       new ChatGoogleGenerativeAI({
         apiKey: config.ai.google,
         model: 'gemini-1.5-pro',
-        temperature: 2,
+        temperature: 0.3,
         maxRetries: 7,
       }),
   },
@@ -94,7 +96,7 @@ const definitions: Record<ModelName, ModelDefinition> = {
       new ChatGroq({
         apiKey: config.ai.groq,
         model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-        temperature: 2,
+        temperature: 0.3,
         maxRetries: 7,
       }),
   },
@@ -104,7 +106,7 @@ const definitions: Record<ModelName, ModelDefinition> = {
       new ChatGroq({
         apiKey: config.ai.groq,
         model: 'meta-llama/llama-4-maverick-17b-128e-instruct',
-        temperature: 2,
+        temperature: 0.3,
         maxRetries: 7,
       }),
   },

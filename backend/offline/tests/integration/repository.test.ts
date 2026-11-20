@@ -351,7 +351,7 @@ test(
         assert.match(await handler(careBody, randomUUID()), /^CON HealthAccess/);
         assert.match(await handler({ ...careBody, text: '1' }, randomUUID()), /^CON Choose service/);
         assert.match(await handler({ ...careBody, text: '1*1' }, randomUUID()), /^CON Enter area/);
-        assert.match(await handler({ ...body, text: '2' }, randomUUID()), /Enter patient code/);
+        assert.match(await handler({ ...body, text: '2' }, randomUUID()), /Enter the access code/);
         const request = { ...body, text: `2*${patientCode}` };
         assert.match(await handler(request, randomUUID()), /Test allergy/);
         assert.match(
@@ -423,7 +423,7 @@ test(
             latitude: 10,
             longitude: 7,
             status: 'APPROVED',
-            is_demo: true,
+            is_demo: false,
           },
         });
         await prisma.facilityService.create({
@@ -453,7 +453,7 @@ test(
           { ...body, text: `1*1*Queue Test Area ${suffix}` },
           randomUUID(),
         );
-        assert.match(result, /^CON DEMO: Retry test clinic/);
+        assert.match(result, /^CON Retry test clinic/);
 
         const queue = () =>
           repository.withUssdSession(body, randomUUID(), async (_session, scoped) => {
@@ -474,6 +474,27 @@ test(
         assert.ok(jobs.some((row) => row.logical_key.endsWith(':retry:1')));
       },
     );
+
+    await t.test('SMS conversation memory is encrypted at rest and restored next turn', async () => {
+      await processMessage('Hello');
+      await processMessage('my head hurts a lot today');
+      const stored = await prisma.smsConversation.findUniqueOrThrow({
+        where: { phone_digest: crypto.digestPhone(phone) },
+      });
+      const raw = JSON.stringify(stored.context);
+      assert.doesNotMatch(raw, /head hurts/);
+      assert.doesNotMatch(raw, /"history"/);
+      assert.match(raw, /historyEnvelope/);
+      const history = crypto.decrypt<Array<{ role: string; text: string }>>(
+        (stored.context as { historyEnvelope: string }).historyEnvelope,
+        'sms-history',
+      );
+      assert.deepEqual(
+        history.filter((turn) => turn.role === 'user').map((turn) => turn.text),
+        ['Hello', 'my head hurts a lot today'],
+      );
+      await processMessage('CANCEL');
+    });
 
     await t.test(
       'USSD Exit revokes the protected read session and cannot replay clinical data',

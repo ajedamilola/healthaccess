@@ -1,7 +1,9 @@
 # Mediwise → HealthAccess integration contract
 
-Status: active. This file is the single coordination point for parallel work.
-Read it before touching code. Decisions here supersede `plans/01_*`.
+Status: completed 17 Nov 2026. This file preserves the decisions, ownership map
+and acceptance criteria used for the parallel build. For current runtime
+documentation use [README.md](README.md), [architecture.md](architecture.md) and
+[operations.md](operations.md).
 
 ## Decisions (confirmed 17 Nov 2026)
 
@@ -11,16 +13,17 @@ Read it before touching code. Decisions here supersede `plans/01_*`.
 | Database | Prisma replaces the SQL schema. One PostgreSQL `public` schema. `backend/online/prisma/schema.prisma` is the source of truth. |
 | Offline | Rewritten on Prisma. It uses the same generated client and the shared access service. No HTTP dependency on online. |
 | Auth | Mediwise-style JWT: short-lived access token + rotating refresh token backed by `auth_sessions`. Google OAuth supported. |
-| AI | Full mediwise behavior: agents read the patient's records and write analysis/schedules back. Every AI read/write is audited. Patient/grant codes, phone numbers and raw phone values are still never placed in prompts. |
+| AI | Full mediwise behavior: agents read the patient's records and write analysis/schedules back. Every AI read/write is audited. OpenRouter is the preferred provider; direct providers remain fallbacks. Patient/grant codes, phone numbers and raw phone values are never placed in prompts. |
 | Stack | TypeScript, Express 5, Node 24, `node:test` + `supertest`. |
 | Reminders | SMS through the existing Africa's Talking outbox **and** Firebase Cloud Messaging push. |
 | Storage | S3-compatible object storage with presigned URLs (`sharp` for image normalization). |
+| Deployment | Docker Compose with PostgreSQL 16 and Redis 7. S3/MinIO stays external. The API reference is generated at `docs/api/index.html` and served at `/docs`. |
 
 ## Non-negotiable engineering rules
 
 1. `backend/online/prisma/schema.prisma` is the only schema definition. Do not add raw table DDL outside `prisma/migrations`.
 2. Every Prisma query is scoped by the authenticated account or patient. Controllers never accept a patient id from the request body; resolve it from `req.auth`.
-3. Secrets stay in `.env`. Never log message bodies, codes, phone numbers, tokens or clinical values.
+3. Secrets stay in `.env`. Never log message bodies, codes, phone numbers, tokens or clinical values in production. The offline `LOG_HTTP_BODIES=full` mode is a local debugging exception; production defaults to `redacted` and must not enable `full`.
 4. Patient/grant codes are HMAC digests. SMS/USSD payloads remain AES-256-GCM envelopes. Reuse `backend/shared`.
 5. The offline process must start and serve callbacks without the online process running.
 6. Timestamps are `timestamptz`. Money/measurements use `Decimal`. UUIDs are DB-generated.
@@ -35,7 +38,7 @@ backend/
     prisma/schema.prisma  source of truth
     prisma/migrations/
     src/app.ts            route wiring (owned by coordinator)
-    src/db.ts             PrismaClient singleton, exported for offline via subpath
+    src/db.ts             PrismaClient singleton (offline has its own src/db.ts)
     src/modules/*         feature modules
   offline/                @healthaccess/offline: SMS/USSD, now Prisma-backed
 ```
@@ -110,32 +113,38 @@ PATCH  /medications/moments/:id    POST /devices
 ### AI contract (`src/ai`)
 
 - Agents: symptom chat (ReAct + memory), medication scheduler/adder.
-- Providers: DeepSeek, Google Gemini, Anthropic, Groq, Serper. Keys from env; no key = endpoint returns `503`.
+- Providers: OpenRouter (preferred), DeepSeek, Google Gemini, Anthropic, Groq, Serper. Keys from env; no key = endpoint returns `503`.
 - `lookupPatientDetails` returns the patient's profile, allergies, medical events, symptom names, location. Never patient codes, grant codes, phone numbers or `phone_digest`.
 - `editSymptomAnalysis` and `createMedicationSchedule` write through the owning module's service and append an `audit_events` row with `channel = SYSTEM`, `actor_ref = "ai:<model>"`.
-- LangGraph checkpointer owns schema `ai_agent_state`. It is not modelled in Prisma; create it at boot with `checkpointer.setup()`.
+- LangGraph checkpointer owns schema `ai_agent_state`. It is not modelled in Prisma. Setup runs once as an administrator; `ensureCheckpointerReady()` skips setup when the checkpoint tables already exist.
 
 ### Offline rewrite
 
 - Keep `src/channels/**`, `src/security/**`, `src/providers/**`, `src/config.ts`, `src/app.ts` intact except for wiring.
 - Replace `src/repository.ts` internals: Prisma for sessions/consents/grants/directory/content; `prisma.$queryRaw` for `FOR UPDATE SKIP LOCKED` claims and the haversine query.
-- Replace `healthaccess_api.*` calls with `src/access.ts`, which wraps the online `src/domain/access.ts` service.
+- Routine calls were replaced inside `src/repository.ts` with Prisma queries plus `@healthaccess/shared` policy/projection helpers; there is no separate `access.ts`.
 - Channel is app-level now: offline serves only `/callbacks/africastalking/*`; online exposes no SMS/USSD routes.
 - Keep the crypto contract: `CODE_DIGEST_KEY` purposes `patient|grant|phone|input`; AES-GCM envelopes unchanged.
 - Integration tests move from `pg` + SQL schema to Prisma + migrations.
 
 ## Phases and acceptance
 
-1. **Foundation (coordinator, now):** workspace, Prisma schema, core files, module placeholders. `prisma validate` passes.
+All phases completed on 17 Nov 2026. Final verification: typecheck/build clean,
+shared 4/4, online 79/79, offline unit 71/71 and DB 20/20; the compose stack with
+PostgreSQL and Redis is healthy; the API reference contains 48 endpoints.
+
+1. **Foundation (coordinator):** workspace, Prisma schema, core files, module placeholders. `prisma validate` passes.
 2. **Database (db-agent):** initial migration applies to a fresh DB, seed creates field definitions/services/demo data, schema test passes.
 3. **Auth + users (auth-agent):** register/login/refresh/logout/Google/phone verification; profile and medical CRUD; avatar presign.
 4. **Portal + directory (portal-agent):** fields, emergency summary, patient code rotation, grants, consents, access events, directory reads, record reads. Field/channel authorization tests.
 5. **Symptom + AI (ai-agent):** chat CRUD, follow-ups, attachment upload, agents/tools, AI writes audited.
 6. **Medications + reminders (meds-agent):** schedule CRUD, moment status, AI schedule creation, SMS outbox enqueue, FCM send, reminder job.
 7. **Offline (offline-agent):** Prisma-backed repository, all 71 unit + 20 integration tests green or explicitly rewritten with equal coverage.
-8. **Docs/DevOps (docs-agent):** READMEs, docker-compose (Postgres + Redis + MinIO), CI.
+8. **Docs/DevOps (docs-agent):** READMEs, docker-compose (PostgreSQL + Redis; S3/MinIO external), API reference, CI.
 
 ## Coordination
+
+The coordination rules below applied during the parallel build; the work is complete.
 
 - Post `ASK` to `main` for contract ambiguity or cross-owner edits.
 - Post `HOLD` if blocked by an unmerged dependency.

@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { configure, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { delay, http, HttpResponse } from "msw";
+import { http, HttpResponse } from "msw";
 import { server } from "@/api/mocks/server";
 import { symptomDetail, symptomSevere } from "@/api/mocks/fixtures";
-import { resetSymptomHandlers, symptomHandlers } from "@/api/mocks/handlers/symptom";
+import { resetSymptomHandlers, sseResponse, symptomHandlers, tokenFrames } from "@/api/mocks/handlers/symptom";
 import { AssistantThread } from "@/features/assistant/AssistantThread";
 import { renderWithProviders } from "./utils";
 
@@ -25,16 +25,14 @@ beforeEach(() => {
 });
 
 describe("AssistantThread", () => {
-  it("renders the saved conversation, Markdown and the safety copy", async () => {
+  it("renders the saved conversation as chat bubbles with Markdown and the safety copy", async () => {
     renderWithProviders(<AssistantThread id={ID} />);
 
     expect(screen.getByRole("status", { name: "Loading conversation" })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "Mild headache and runny nose", level: 1 })).toBeInTheDocument();
     expect(screen.getByText(/A mild headache with a runny nose for two days is often due/)).toBeInTheDocument();
-    expect(
-      screen.getByText("General information only. Not a diagnosis. In an emergency, seek local emergency care immediately."),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Seek urgent care now")).toBeNull();
+    expect(screen.getByText(/General information, not a diagnosis/)).toBeInTheDocument();
+    expect(screen.queryByText("This may need urgent care")).toBeNull();
   });
 
   it("shows urgent-care guidance above the thread for a severe record", async () => {
@@ -42,18 +40,18 @@ describe("AssistantThread", () => {
 
     renderWithProviders(<AssistantThread id={ID} />);
 
-    expect(await screen.findByText("Seek urgent care now")).toBeInTheDocument();
-    expect(screen.getAllByText(/Call your local emergency number/).length).toBeGreaterThan(0);
+    expect(await screen.findByText("This may need urgent care")).toBeInTheDocument();
+    expect(screen.getAllByText(/call your local emergency number/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText("Severe").length).toBeGreaterThan(0);
   });
 
-  it("renames the conversation and changes severity with PATCH", async () => {
+  it("renames the conversation and changes severity from the details panel", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AssistantThread id={ID} />);
     await screen.findByRole("heading", { name: "Mild headache and runny nose", level: 1 });
 
-    const title = screen.getByLabelText("Conversation title");
-    fireEvent.change(title, { target: { value: "Headache and runny nose (day 2)" } });
+    await user.click(screen.getByRole("button", { name: "Conversation details" }));
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Headache and runny nose (day 2)" } });
     await user.click(screen.getByRole("button", { name: "Save title" }));
 
     expect(await screen.findByRole("heading", { name: "Headache and runny nose (day 2)", level: 1 })).toBeInTheDocument();
@@ -63,82 +61,69 @@ describe("AssistantThread", () => {
     await user.click(within(severity).getByRole("button", { name: "Severe" }));
 
     expect(await screen.findByText("Severity updated.")).toBeInTheDocument();
-    expect(await screen.findByText("Seek urgent care now")).toBeInTheDocument();
+    expect(await screen.findByText("This may need urgent care")).toBeInTheDocument();
   }, 20_000);
 
-  it("appends the two follow-up messages and refetches the thread", async () => {
-    let gets = 0;
-    let messages = [...symptomDetail.messages];
+  it("streams a follow-up reply into the thread", async () => {
+    let body: FormData | null = null;
+    const question = "Should I be worried if the headache gets a little worse in the evening?";
+    const answer = "A slight increase in the evening **is not necessarily a reason to worry**.";
     server.use(
-      http.get(`/api/v1/symptom/${ID}`, () => {
-        gets += 1;
-        return HttpResponse.json({ symptom: symptomDetail.symptom, messages });
-      }),
-      http.post(`/api/v1/symptom/${ID}/follow-up`, async () => {
-        await delay(40);
-        const appended = [
-          { type: "Human", content: "Should I be worried if the headache gets a little worse in the evening?" },
-          { type: "AI", content: "A slight increase in the evening **is not necessarily a reason to worry**." },
-        ];
-        messages = [...messages, ...appended];
-        return HttpResponse.json({
-          symptom: { ...symptomDetail.symptom, summary: "Mild headache and runny nose for two days; headache gets a little worse in the evening." },
-          messages: appended,
-        });
+      http.post(`/api/v1/symptom/${ID}/follow-up/stream`, async ({ request }) => {
+        body = await request.formData();
+        const messages = [...symptomDetail.messages, { type: "Human", content: question }, { type: "AI", content: answer }];
+        return sseResponse(
+          [["record", { symptom: symptomDetail.symptom }], ...tokenFrames(answer), ["done", { symptom: symptomDetail.symptom, messages }]],
+          10,
+        );
       }),
     );
-    const user = userEvent.setup();
     renderWithProviders(<AssistantThread id={ID} />);
     await screen.findByRole("heading", { name: "Mild headache and runny nose", level: 1 });
 
-    fireEvent.change(screen.getByLabelText("Ask a follow-up"), { target: { value: "Should I be worried if the headache gets a little worse in the evening?" } });
-    await user.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.change(screen.getByLabelText("Reply or ask a follow-up…"), { target: { value: question } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    expect(await screen.findByText("Should I be worried if the headache gets a little worse in the evening?")).toBeInTheDocument();
-    expect(await screen.findByText("is not necessarily a reason to worry")).toBeInTheDocument();
-    expect(screen.getByText("Reply received.")).toBeInTheDocument();
-    await waitFor(() => expect(gets).toBeGreaterThanOrEqual(2));
+    expect(await screen.findByText(question)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).toBeNull());
+    expect(screen.getByText("is not necessarily a reason to worry")).toBeInTheDocument();
+    expect(screen.getAllByText(question)).toHaveLength(1);
+    expect(body!.get("message")).toBe(question);
+    expect(body!.get("includeRecords")).toBeNull();
   }, 20_000);
 
-  it("cancels a pending follow-up, explains the outcome and refetches the thread", async () => {
+  it("stops a streaming follow-up and refetches the thread", async () => {
     let gets = 0;
     server.use(
       http.get(`/api/v1/symptom/${ID}`, () => {
         gets += 1;
         return HttpResponse.json(symptomDetail);
       }),
-      http.post(`/api/v1/symptom/${ID}/follow-up`, async () => {
-        await delay(800);
-        return HttpResponse.json(symptomDetail);
-      }),
+      http.post(`/api/v1/symptom/${ID}/follow-up/stream`, () => sseResponse(tokenFrames("word ".repeat(200)), 20)),
     );
     const user = userEvent.setup();
     renderWithProviders(<AssistantThread id={ID} />);
     await screen.findByRole("heading", { name: "Mild headache and runny nose", level: 1 });
 
-    fireEvent.change(screen.getByLabelText("Ask a follow-up"), { target: { value: "Is it getting worse?" } });
-    await user.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.change(screen.getByLabelText("Reply or ask a follow-up…"), { target: { value: "Is it getting worse?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await user.click(await screen.findByRole("button", { name: "Stop" }));
 
-    expect(await screen.findByText("Thinking. This can take up to 3 minutes.")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
-
-    expect(await screen.findByText("Request cancelled")).toBeInTheDocument();
-    expect(screen.getByText(/may still have been updated/i)).toBeInTheDocument();
+    expect(await screen.findByText("Stopped")).toBeInTheDocument();
     await waitFor(() => expect(gets).toBeGreaterThanOrEqual(2));
   });
 
   it("keeps the thread visible and offers a retry when the follow-up AI is unavailable", async () => {
     server.use(
-      http.post(`/api/v1/symptom/${ID}/follow-up`, () =>
-        HttpResponse.json({ error: "ai_unavailable", message: "The assistant is unavailable right now.", request_id: "req-ai" }, { status: 503 }),
+      http.post(`/api/v1/symptom/${ID}/follow-up/stream`, () =>
+        HttpResponse.json({ error: "ai_unavailable", request_id: "req-ai" }, { status: 503 }),
       ),
     );
-    const user = userEvent.setup();
     renderWithProviders(<AssistantThread id={ID} />);
     await screen.findByRole("heading", { name: "Mild headache and runny nose", level: 1 });
 
-    fireEvent.change(screen.getByLabelText("Ask a follow-up"), { target: { value: "Is this urgent?" } });
-    await user.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.change(screen.getByLabelText("Reply or ask a follow-up…"), { target: { value: "Is this urgent?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText("The assistant is unavailable right now")).toBeInTheDocument();
     expect(screen.getByText("Request req-ai")).toBeInTheDocument();
@@ -182,5 +167,28 @@ describe("AssistantThread", () => {
     await user.click(within(dialog).getByRole("button", { name: "Delete conversation" }));
 
     await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/app/assistant"));
+  });
+});
+
+describe("AssistantThread retry after a partly saved follow-up", () => {
+  it("does not offer Try again when the server already saved the message", async () => {
+    const question = "Is it getting worse?";
+    server.use(
+      http.post(`/api/v1/symptom/${ID}/follow-up/stream`, () =>
+        sseResponse([["token", { content: "Partial" }], ["error", { error: "stream_error" }]]),
+      ),
+      http.get(`/api/v1/symptom/${ID}`, () =>
+        HttpResponse.json({
+          ...symptomDetail,
+          messages: [...symptomDetail.messages, { type: "Human", content: question }],
+        }),
+      ),
+    );
+    renderWithProviders(<AssistantThread id={ID} />);
+    await screen.findByRole("heading", { name: "Mild headache and runny nose", level: 1 });
+    fireEvent.change(screen.getByLabelText("Reply or ask a follow-up…"), { target: { value: question } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText(/Your message was saved above/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
 });

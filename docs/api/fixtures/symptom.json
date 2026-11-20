@@ -1,7 +1,7 @@
 {
   "group": "Symptom analysis",
   "order": 40,
-  "description": "AI-assisted symptom intake. Each create or follow-up request makes a real model call, then returns the stored symptom record and conversation. Records are scoped to the authenticated account; ids that do not belong to the caller return 404 so ownership is not disclosed.",
+  "description": "AI-assisted symptom intake. Create and follow-up requests run the symptom agent and return the stored symptom record and conversation; the /stream variants run the same agent and deliver the assessment as Server-Sent Events. Records are scoped to the authenticated account; ids that do not belong to the caller return 404 so ownership is not disclosed.",
   "endpoints": [
     {
       "id": "symptom-create",
@@ -33,6 +33,12 @@
           "description": "Allow the agent to update the stored name, severity and summary. Default true."
         },
         {
+          "name": "language",
+          "type": "string",
+          "required": false,
+          "description": "Language code for this conversation (for example en, pcm, yo, ha, ig). Defaults to the profile's preferred language, then en."
+        },
+        {
           "name": "images",
           "type": "file[]",
           "required": false,
@@ -57,6 +63,7 @@
               "summary": "Mild headache and runny nose for two days.",
               "include_records": true,
               "modify_history": true,
+              "language": "en",
               "files": [],
               "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
               "model_version": "openrouter",
@@ -82,6 +89,80 @@
         "messages is the whole thread on create: the Human message followed by the AI reply, which uses Markdown.",
         "files lists object-storage keys for attachments and is [] when none were sent.",
         "The request is synchronous; allow at least 180 s in client code."
+      ]
+    },
+    {
+      "id": "symptom-stream",
+      "name": "Create a symptom analysis (streaming)",
+      "method": "POST",
+      "path": "/symptom/stream",
+      "summary": "Send a symptom description and receive the AI assessment as Server-Sent Events.",
+      "description": "multipart/form-data with the same fields, limits and validation as POST /symptom. Authentication, multipart parsing, validation, AI-configuration and patient-profile checks run before any SSE headers, so failures there return the normal JSON error with no stream and no record. Once the checks pass the server responds 200 text/event-stream, emits record first, then step and token events, then done, and closes the stream. Comments `: ping` are sent after 15 s without an event. If the agent fails after headers, an error event is emitted and the stream closes. Attachments are deleted on failure; the record created by the failed request is deleted only when no token was emitted.",
+      "auth": "bearer",
+      "roles": [],
+      "contentType": "multipart/form-data",
+      "bodyFields": [
+        {
+          "name": "message",
+          "type": "string",
+          "required": true,
+          "description": "Symptom description, trimmed length 1-8000 characters."
+        },
+        {
+          "name": "includeRecords",
+          "type": "boolean",
+          "required": false,
+          "description": "Include stored records in the AI context. Default true."
+        },
+        {
+          "name": "modifyHistory",
+          "type": "boolean",
+          "required": false,
+          "description": "Allow the agent to update the stored name, severity and summary. Default true."
+        },
+        {
+          "name": "images",
+          "type": "file[]",
+          "required": false,
+          "description": "0-5 repeated parts, each an image/* or application/pdf file up to 10 MB."
+        }
+      ],
+      "responses": [
+        {
+          "status": 200,
+          "label": "Event stream",
+          "description": "Named SSE events. record carries the stored symptom before the model output; step carries a tool lifecycle; token carries one text chunk; done carries the final stored record and the full conversation. A stream that fails after headers sends error instead of done.",
+          "headers": {
+            "content-type": "text/event-stream",
+            "cache-control": "no-cache, no-transform",
+            "connection": "keep-alive",
+            "x-accel-buffering": "no"
+          },
+          "body": "event: record\ndata: {\"symptom\":{\"id\":\"ab143840-0058-4486-aa0d-2faf0c88121a\",\"patient_id\":\"20000000-0000-4000-8000-000000000005\",\"account_id\":\"20000000-0000-4000-8000-000000000004\",\"name\":null,\"severity\":null,\"summary\":null,\"include_records\":true,\"modify_history\":true,\"language\":\"en\",\"files\":[],\"thread_id\":\"symptom_ab143840-0058-4486-aa0d-2faf0c88121a\",\"model_version\":\"openrouter\",\"created_at\":\"2026-11-17T16:13:58.179Z\",\"updated_at\":\"2026-11-17T16:13:58.181Z\"}}\n\nevent: step\ndata: {\"id\":\"b0e6e5c2-3f6f-4a0e-9a6e-4b0c1d3a2f11\",\"name\":\"lookupPatientDetails\",\"status\":\"started\",\"input\":{}}\n\nevent: step\ndata: {\"id\":\"b0e6e5c2-3f6f-4a0e-9a6e-4b0c1d3a2f11\",\"name\":\"lookupPatientDetails\",\"status\":\"completed\",\"output\":\"{\\\"allergies\\\":[],\\\"conditions\\\":[],\\\"recentSymptomNames\\\":[]}\"}\n\nevent: step\ndata: {\"id\":\"d7c0f0a4-8cf2-45f3-b0c8-1f3c5b6e8a02\",\"name\":\"editSymptomAnalysis\",\"status\":\"started\",\"input\":{\"symptomName\":\"Mild headache and runny nose\",\"severity\":\"MILD\"}}\n\nevent: step\ndata: {\"id\":\"d7c0f0a4-8cf2-45f3-b0c8-1f3c5b6e8a02\",\"name\":\"editSymptomAnalysis\",\"status\":\"completed\",\"output\":\"Symptom analysis updated successfully\"}\n\nevent: token\ndata: {\"content\":\"A mild headache with a runny nose for two days\"}\n\nevent: token\ndata: {\"content\":\" is often due to a common viral infection.\"}\n\nevent: done\ndata: {\"symptom\":{\"id\":\"ab143840-0058-4486-aa0d-2faf0c88121a\",\"patient_id\":\"20000000-0000-4000-8000-000000000005\",\"account_id\":\"20000000-0000-4000-8000-000000000004\",\"name\":\"Mild headache and runny nose\",\"severity\":\"MILD\",\"summary\":\"Mild headache and runny nose for two days.\",\"include_records\":true,\"modify_history\":true,\"language\":\"en\",\"files\":[],\"thread_id\":\"symptom_ab143840-0058-4486-aa0d-2faf0c88121a\",\"model_version\":\"openrouter\",\"created_at\":\"2026-11-17T16:13:58.179Z\",\"updated_at\":\"2026-11-17T16:14:08.281Z\"},\"messages\":[{\"type\":\"Human\",\"content\":\"I have had a mild headache and a runny nose for two days.\"},{\"type\":\"AI\",\"content\":\"A mild headache with a runny nose for two days is often due to a common viral infection.\"}]}\n"
+        },
+        {
+          "status": 503,
+          "label": "AI unavailable",
+          "description": "Provider not configured. Returned as JSON before any SSE headers; no record is created.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "error": "ai_unavailable",
+            "message": "AI provider is not configured",
+            "request_id": "8b6f1c4d-2f3a-4d6e-9a10-7c5b2e9d4a31"
+          }
+        }
+      ],
+      "curl": "TOKEN=\"<access-jwt>\"\ncurl -sS -N -X POST http://localhost:3000/v1/symptom/stream \\\n  -H \"authorization: Bearer $TOKEN\" \\\n  -F 'message=I have had a mild headache and a runny nose for two days.' \\\n  -F 'includeRecords=true' \\\n  -F 'modifyHistory=true'",
+      "notes": [
+        "Event order is record, then any number of step/token events, then exactly one done or error.",
+        "step payloads are { id, name, status, input?, output?, error? }; id is the LangGraph run_id and status is started, completed or failed.",
+        "token payloads are { content } and must be concatenated in arrival order to reconstruct the reply Markdown.",
+        "done payloads are { symptom, messages }; messages is the full ConversationEntry[] thread read back from the checkpointer.",
+        "error payloads are { error, message } and replace done; the connection then closes.",
+        "Text between blank lines starting with \":\" is a heartbeat and can be ignored by clients.",
+        "Use -N with curl and disable proxy buffering; the endpoint sets Cache-Control: no-cache, no-transform and X-Accel-Buffering: no."
       ]
     },
     {
@@ -128,6 +209,7 @@
                 "summary": "Mild headache and runny nose for two days.",
                 "include_records": true,
                 "modify_history": true,
+                "language": "en",
                 "files": [],
                 "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
                 "model_version": "openrouter",
@@ -196,6 +278,7 @@
               "summary": "Mild headache and runny nose for two days.",
               "include_records": true,
               "modify_history": true,
+              "language": "en",
               "files": [],
               "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
               "model_version": "openrouter",
@@ -284,6 +367,7 @@
               "summary": "Mild headache and runny nose for two days; headache gets a little worse in the evening.",
               "include_records": true,
               "modify_history": true,
+              "language": "en",
               "files": [],
               "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
               "model_version": "openrouter",
@@ -308,6 +392,73 @@
         "The agent may rewrite name, severity and summary; check symptom.updated_at.",
         "Unknown or foreign ids return 404 before any model call is made.",
         "Requires a configured AI provider; otherwise 503 ai_unavailable."
+      ]
+    },
+    {
+      "id": "symptom-follow-up-stream",
+      "name": "Continue a symptom conversation (streaming)",
+      "method": "POST",
+      "path": "/symptom/{id}/follow-up/stream",
+      "summary": "Ask a follow-up question and receive the reply as Server-Sent Events.",
+      "description": "multipart/form-data with the same fields and limits as POST /symptom/{id}/follow-up. Ownership, validation, AI-configuration and attachment checks run before any SSE headers and return the normal JSON errors, including 404 for unknown or foreign ids. On success the server responds 200 text/event-stream, emits record with the existing symptom, then step and token events, then done with the updated record and the full conversation. Uploaded attachments are appended to symptom.files only when done is emitted. A failure after headers sends error and cleans the uploaded objects but never deletes the existing record.",
+      "auth": "bearer",
+      "roles": [],
+      "contentType": "multipart/form-data",
+      "pathParams": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "required": true,
+          "description": "Symptom analysis id returned by POST /symptom or POST /symptom/stream."
+        }
+      ],
+      "bodyFields": [
+        {
+          "name": "message",
+          "type": "string",
+          "required": true,
+          "description": "Follow-up text, trimmed length 1-8000 characters."
+        },
+        {
+          "name": "images",
+          "type": "file[]",
+          "required": false,
+          "description": "0-5 image/* or application/pdf parts, max 10 MB each."
+        }
+      ],
+      "responses": [
+        {
+          "status": 200,
+          "label": "Event stream",
+          "description": "Same event protocol as POST /symptom/stream. record repeats the existing symptom; done carries the updated record and the whole thread, not just the last two messages.",
+          "headers": {
+            "content-type": "text/event-stream",
+            "cache-control": "no-cache, no-transform",
+            "connection": "keep-alive",
+            "x-accel-buffering": "no"
+          },
+          "body": "event: record\ndata: {\"symptom\":{\"id\":\"ab143840-0058-4486-aa0d-2faf0c88121a\",\"patient_id\":\"20000000-0000-4000-8000-000000000005\",\"account_id\":\"20000000-0000-4000-8000-000000000004\",\"name\":\"Mild headache and runny nose\",\"severity\":\"MILD\",\"summary\":\"Mild headache and runny nose for two days.\",\"include_records\":true,\"modify_history\":true,\"language\":\"en\",\"files\":[],\"thread_id\":\"symptom_ab143840-0058-4486-aa0d-2faf0c88121a\",\"model_version\":\"openrouter\",\"created_at\":\"2026-11-17T16:13:58.179Z\",\"updated_at\":\"2026-11-17T16:14:08.281Z\"}}\n\nevent: token\ndata: {\"content\":\"A slight increase in the evening\"}\n\nevent: token\ndata: {\"content\":\" is not necessarily a reason to worry.\"}\n\nevent: done\ndata: {\"symptom\":{\"id\":\"ab143840-0058-4486-aa0d-2faf0c88121a\",\"patient_id\":\"20000000-0000-4000-8000-000000000005\",\"account_id\":\"20000000-0000-4000-8000-000000000004\",\"name\":\"Mild headache and runny nose\",\"severity\":\"MILD\",\"summary\":\"Mild headache and runny nose for two days; headache gets a little worse in the evening.\",\"include_records\":true,\"modify_history\":true,\"language\":\"en\",\"files\":[],\"thread_id\":\"symptom_ab143840-0058-4486-aa0d-2faf0c88121a\",\"model_version\":\"openrouter\",\"created_at\":\"2026-11-17T16:13:58.179Z\",\"updated_at\":\"2026-11-17T16:14:37.432Z\"},\"messages\":[{\"type\":\"Human\",\"content\":\"I have had a mild headache and a runny nose for two days.\"},{\"type\":\"AI\",\"content\":\"A mild headache with a runny nose for two days is often due to a common viral infection.\"},{\"type\":\"Human\",\"content\":\"Should I be worried if the headache gets a little worse in the evening?\"},{\"type\":\"AI\",\"content\":\"A slight increase in the evening is not necessarily a reason to worry. Seek urgent care for a sudden or severe headache, confusion, weakness or numbness, vision changes, a stiff neck with fever, or repeated vomiting.\"}]}\n"
+        },
+        {
+          "status": 404,
+          "label": "Not found",
+          "description": "Unknown, malformed or foreign id. Returned as JSON before any SSE headers; the model is never called.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "error": "not_found",
+            "message": "Symptom analysis record not found",
+            "request_id": "971444ac-d52b-423a-908d-23da8b683b5e"
+          }
+        }
+      ],
+      "curl": "TOKEN=\"<access-jwt>\"\nSYMPTOM_ID=<symptom-id>\ncurl -sS -N -X POST http://localhost:3000/v1/symptom/$SYMPTOM_ID/follow-up/stream \\\n  -H \"authorization: Bearer $TOKEN\" \\\n  -F 'message=Should I be worried if the headache gets a little worse in the evening?'",
+      "notes": [
+        "Use the same event parser as POST /symptom/stream: record, step*, token*, done|error.",
+        "The done event contains the full ConversationEntry[] history; the non-streaming follow-up returns only the last two messages.",
+        "Client disconnect aborts the agent through an AbortSignal; a record that already existed is never deleted.",
+        "The non-streaming POST /symptom and POST /symptom/{id}/follow-up endpoints are unchanged."
       ]
     },
     {
@@ -364,6 +515,7 @@
               "summary": "Mild headache and runny nose for two days; headache gets a little worse in the evening.",
               "include_records": true,
               "modify_history": true,
+              "language": "en",
               "files": [],
               "thread_id": "symptom_ab143840-0058-4486-aa0d-2faf0c88121a",
               "model_version": "openrouter",

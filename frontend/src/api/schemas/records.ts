@@ -45,3 +45,10 @@ export const grantCloseResponseSchema = z
   .loose();
 
 export type GrantCloseResponse = z.infer<typeof grantCloseResponseSchema>;
+
+/** One box for every code: the API reports which kind of code it was. */
+export const openCodeResponseSchema = grantProjectionSchema.extend({
+  kind: z.enum(["emergency", "grant"]).optional(),
+});
+
+export type OpenCodeResponse = z.infer<typeof openCodeResponseSchema>;

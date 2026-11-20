@@ -46,11 +46,11 @@ export function PatientCodeCard() {
       <div className={styles.panelHead}>
         <div className={styles.panelIntro}>
           <h2 id="patient-code-title" className={styles.panelTitle}>
-            Patient code
+            Permanent emergency code
           </h2>
           <p className={styles.panelCopy}>
-            This is the code you give a practitioner or clinic. It identifies your record but never opens it on its
-            own.
+            This one code opens your emergency summary (the details you picked on Emergency summary) for anyone you give
+            it to, on HealthAccess, SMS (LOOKUP) or USSD. Rotate it if you think someone has it who should not.
           </p>
         </div>
         {patientCode.data?.code_version ? (

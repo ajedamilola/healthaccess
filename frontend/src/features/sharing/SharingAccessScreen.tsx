@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useShareableFields } from "@/api/hooks/sharing";
 import { PatientCodeCard } from "./PatientCodeCard";
+import { QuickShareCard } from "./QuickShareCard";
 import { CreateGrantForm } from "./CreateGrantForm";
 import { GrantList } from "./GrantList";
 import styles from "./sharing.module.css";
@@ -21,10 +22,12 @@ export function SharingAccessScreen() {
       <header className={styles.intro}>
         <h1 className={styles.title}>Sharing and access</h1>
         <p className={styles.subtitle}>
-          Your patient code identifies you. Access codes let someone read only the fields you choose, for a limited
-          time. <Link href="/app/access-log">See who opened your record</Link>.
+          Share in one tap with a quick code, or give your permanent emergency code. Whoever receives a code only needs
+          that one code. <Link href="/app/access-log">See who opened your record</Link>.
         </p>
       </header>
+
+      <QuickShareCard />
 
       <PatientCodeCard />
 

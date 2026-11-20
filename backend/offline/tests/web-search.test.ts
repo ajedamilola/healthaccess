@@ -367,3 +367,77 @@ test('createWebSearch validates configuration without exposing secrets', () => {
     /public hostnames/,
   );
 });
+
+test('discoverEmergency runs hospital and ambulance Maps queries in parallel and merges deterministically', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const fetchImpl = mockFetch(async (url, init) => {
+    assert.equal(url, 'https://google.serper.dev/maps');
+    const body = requestBody(init);
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    inFlight -= 1;
+    if (body.q === 'Road accident emergency hospital in Ikeja') {
+      return responseJson({
+        places: [
+          { title: 'Ikeja Emergency Hospital', address: '1 Allen Road', placeId: 'h1' },
+          { title: 'Shared Clinic', address: '2 Allen Road', placeId: 'shared' },
+        ],
+      });
+    }
+    return responseJson({
+      places: [
+        { title: 'Shared Clinic', address: '2 Allen Road', placeId: 'shared' },
+        { title: 'Lagos Ambulance Service', address: '3 Allen Road', placeId: 'a1' },
+      ],
+    });
+  });
+  const search = createWebSearch(baseConfig({ healthSourceDomains: [] }), { fetchImpl });
+  const leads = await search.discoverEmergency({ area: 'Ikeja', description: 'Road accident' });
+
+  assert.equal(peak, 2);
+  assert.equal(fetchImpl.calls.length, 2);
+  assert.deepEqual(
+    fetchImpl.calls.map((call) => requestBody(call.init).q),
+    ['Road accident emergency hospital in Ikeja', 'Road accident ambulance service in Ikeja'],
+  );
+  assert.deepEqual(
+    leads.map((item) => item.source_reference),
+    ['h1', 'shared', 'a1'],
+  );
+  assert.equal(leads[0].service_label, 'Emergency hospital');
+  assert.equal(leads[2].service_label, 'Ambulance service');
+  assert.ok(leads.every((item) => item.verification_status === 'unverified'));
+});
+
+test('discoverEmergency caps results and tolerates one query failing', async () => {
+  const hospitalPlaces = Array.from({ length: 12 }, (_, index) => ({
+    title: `Hospital ${index}`,
+    address: `${index} Main Road`,
+    placeId: `p${index}`,
+  }));
+  const fetchImpl = mockFetch((_url, init) => {
+    const body = requestBody(init);
+    if (body.q === 'emergency hospital in Lagos') return responseJson({ places: hospitalPlaces });
+    return responseJson({ error: 'provider down' }, { status: 503 });
+  });
+  const search = createWebSearch(baseConfig({ healthSourceDomains: [] }), { fetchImpl });
+  const leads = await search.discoverEmergency({ area: 'Lagos' });
+  assert.equal(leads.length, 8);
+  assert.equal(leads[0].name, 'Hospital 0');
+  assert.equal(leads[7].name, 'Hospital 7');
+});
+
+test('discoverEmergency fails closed on bad input and provider errors', async () => {
+  const fetchImpl = mockFetch(() => responseJson({ places: [] }));
+  const search = createWebSearch(baseConfig({ healthSourceDomains: [] }), { fetchImpl });
+  assert.deepEqual(await search.discoverEmergency({ area: '' }), []);
+  assert.deepEqual(await search.discoverEmergency({ area: '123456' }), []);
+  assert.equal(fetchImpl.calls.length, 0);
+
+  const failing = createWebSearch(baseConfig({ healthSourceDomains: [] }), {
+    fetchImpl: mockFetch(() => responseJson({}, { status: 401 })),
+  });
+  assert.deepEqual(await failing.discoverEmergency({ area: 'Ikeja' }), []);
+});

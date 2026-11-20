@@ -91,6 +91,23 @@ export function useCreateGrant() {
   });
 }
 
+/** One tap: a temporary code for the emergency information, valid on the web and USSD. */
+export function useQuickShare() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (minutes: number) =>
+      request(
+        { url: "/me/grants/quick", method: "POST", data: { expires_in_minutes: minutes } },
+        grantCreateResponseSchema,
+      ),
+    gcTime: 0,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.grants });
+      queryClient.invalidateQueries({ queryKey: qk.accessEvents });
+    },
+  });
+}
+
 export function useRevokeGrant() {
   const queryClient = useQueryClient();
   return useMutation({

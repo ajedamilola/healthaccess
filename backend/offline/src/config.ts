@@ -36,7 +36,28 @@ function commaSeparated(value = ''): string[] {
     .filter(Boolean);
 }
 
+function httpLogBodies(env: Environment, mode: string): 'off' | 'redacted' | 'full' {
+  const value = (env.LOG_HTTP_BODIES || '').trim().toLowerCase();
+  if (!value) return mode === 'production' ? 'redacted' : 'full';
+  if (value !== 'off' && value !== 'redacted' && value !== 'full') {
+    throw new Error('LOG_HTTP_BODIES must be off, redacted or full');
+  }
+  if (mode === 'production' && value === 'full') {
+    throw new Error('LOG_HTTP_BODIES=full is not allowed in production');
+  }
+  return value;
+}
+
 // The pilot has a small environment surface. Operational defaults live here.
+const WORKER_LEASE_SECONDS = 90;
+/** 2 AI calls + ~15 s for search and database work must finish inside the lease. */
+const MAX_AI_TIMEOUT_MS = Math.floor((WORKER_LEASE_SECONDS * 1000 - 15000) / 2);
+
+function boundedInt(value: string | undefined, fallback: number, min: number, max: number) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback;
+}
+
 export function loadConfig(env: Environment = process.env) {
   const mode = env.NODE_ENV || 'development';
   if (!['development', 'test', 'production'].includes(mode)) throw new Error('Invalid NODE_ENV');
@@ -87,7 +108,14 @@ export function loadConfig(env: Environment = process.env) {
       mode === 'production' ? ('ip_allowlist' as const) : ('development_open' as const),
     allowedCidrs,
     callbackBodyLimitBytes: 8192,
-    callbackRatePerMinute: 120,
+    // Every Africa's Talking callback (each SMS and every USSD keypress) comes from a
+    // few provider IPs, so the per-IP ceiling is a flood guard for the whole service;
+    // fairness between people is enforced per phone (callbackPhoneRatePerMinute).
+    callbackRatePerMinute: boundedInt(env.CALLBACK_RATE_PER_MINUTE, 6000, 60, 100000),
+    callbackPhoneRatePerMinute: 60,
+    // Full callback bodies include phone numbers and health text. Production
+    // defaults to redacted; set LOG_HTTP_BODIES=full only for local debugging.
+    httpLogBodies: httpLogBodies(env, mode),
     phoneRatePerMinute: 20,
     lookupRatePerMinute: 10,
     smsTransport: atApiKey ? ('africastalking' as const) : ('mock' as const),
@@ -100,7 +128,8 @@ export function loadConfig(env: Environment = process.env) {
     ussdSessionTtlSeconds: 120,
     ussdMaxChars: 182,
     ussdMaxInvalidAttempts: 3,
-    smsConversationTtlSeconds: 900,
+    // How long an SMS thread (and its encrypted memory) lives after the last message.
+    smsConversationTtlSeconds: boundedInt(env.SMS_CONVERSATION_TTL_SECONDS, 1800, 300, 86400),
     smsReplyTtlSeconds: 900,
     smsMaxSegments: 6,
     searchRadiusKm: 25,
@@ -109,7 +138,11 @@ export function loadConfig(env: Environment = process.env) {
     aiEnabled: !!env.OPENROUTER_API_KEY,
     openrouterApiKey: env.OPENROUTER_API_KEY || '',
     openrouterModel: env.OPENROUTER_MODEL || '',
-    aiTimeoutMs: 10000,
+    // Structured answers from hosted models often take 10-20 s; a short limit made
+    // the SMS assistant silently fall back to the menu.
+    // A chat health question makes two AI calls plus a web search inside one worker
+    // lease (WORKER_LEASE_SECONDS below), so each call must leave room for the other.
+    aiTimeoutMs: boundedInt(env.AI_TIMEOUT_MS, 25000, 1000, MAX_AI_TIMEOUT_MS),
     aiMaxOutputTokens: 600,
     serperApiKey: env.SERPER_API_KEY || '',
     serperTimeoutMs: 5000,
@@ -118,7 +151,7 @@ export function loadConfig(env: Environment = process.env) {
     healthSourceDomains: ['who.int', 'nhs.uk', 'cdc.gov', 'medlineplus.gov', 'ncdc.gov.ng'],
     allowLiveWeb: true,
     workerPollMs: 1000,
-    workerLeaseSeconds: 90,
+    workerLeaseSeconds: WORKER_LEASE_SECONDS,
     workerMaxAttempts: 5,
     smsBodyRetentionDays: 7,
     deliveryRetentionDays: 30,

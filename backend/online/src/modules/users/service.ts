@@ -20,6 +20,29 @@ const phoneSchema = z
   .trim()
   .regex(/^\+[1-9]\d{7,14}$/, 'Phone must be in E.164 format');
 
+const languageSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(/^[a-z]{2,3}(-[a-z0-9]{2,8})?$/, 'Use a language code such as en, yo, ha, ig or fr');
+
+/**
+ * Personal context fields. An empty string clears the stored value so a patient
+ * can remove location or lifestyle details they no longer want the assistant to use.
+ */
+export const PERSONAL_FIELD_KEYS = {
+  city: 'city',
+  state: 'state',
+  country: 'country',
+  gender: 'gender',
+  pregnancyStatus: 'pregnancy_status',
+  smokingStatus: 'smoking_status',
+  alcoholUse: 'alcohol_use',
+  activityLevel: 'activity_level',
+} as const;
+
+type PersonalInputKey = keyof typeof PERSONAL_FIELD_KEYS;
+
 export const profilePatchSchema = z.object({
   firstName: nameSchema.nullish(),
   lastName: nameSchema.nullish(),
@@ -29,6 +52,12 @@ export const profilePatchSchema = z.object({
   city: textSchema.nullish(),
   state: textSchema.nullish(),
   country: textSchema.nullish(),
+  gender: textSchema.nullish(),
+  pregnancyStatus: textSchema.nullish(),
+  smokingStatus: textSchema.nullish(),
+  alcoholUse: textSchema.nullish(),
+  activityLevel: textSchema.nullish(),
+  preferredLanguage: languageSchema.nullish(),
   password: z.string().min(8).max(128).nullish(),
 });
 
@@ -63,6 +92,10 @@ export const medicalUpdateSchema = z.object({
   height: z.union([z.string(), z.number()]).nullish(),
   weight: z.union([z.string(), z.number()]).nullish(),
   gender: textSchema.nullish(),
+  pregnancyStatus: textSchema.nullish(),
+  smokingStatus: textSchema.nullish(),
+  alcoholUse: textSchema.nullish(),
+  activityLevel: textSchema.nullish(),
   bloodType: textSchema.nullish(),
   genoType: textSchema.nullish(),
   bloodPressure: textSchema.nullish(),
@@ -197,6 +230,105 @@ async function writeFieldValues(
   return written;
 }
 
+function personalEntries(input: Partial<Record<PersonalInputKey, string | null | undefined>>) {
+  const write: FieldEntry[] = [];
+  const clear: string[] = [];
+  for (const [inputKey, fieldKey] of Object.entries(PERSONAL_FIELD_KEYS) as Array<
+    [PersonalInputKey, string]
+  >) {
+    const value = input[inputKey];
+    if (value == null) continue;
+    const trimmed = value.trim();
+    if (trimmed) write.push([fieldKey, trimmed]);
+    else clear.push(fieldKey);
+  }
+  return { write, clear };
+}
+
+function normalizePlace(value: string) {
+  return value
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+/**
+ * Match a free-text city/state to a directory area so care search, SMS and USSD
+ * can default to the patient's home area. Returns null when nothing matches.
+ */
+export async function resolveHomeArea(
+  db: Prisma.TransactionClient | typeof prisma,
+  city: string | null | undefined,
+  state: string | null | undefined,
+) {
+  const cityText = city?.trim();
+  if (!cityText) return null;
+  const normalized = normalizePlace(cityText);
+  const candidates = await db.area.findMany({
+    where: {
+      active: true,
+      is_demo: false,
+      OR: [
+        { name: { equals: cityText, mode: 'insensitive' } },
+        { city: { equals: cityText, mode: 'insensitive' } },
+        { aliases: { some: { alias_normalized: normalized } } },
+      ],
+    },
+    select: { id: true, region: true, name: true },
+    orderBy: { id: 'asc' },
+    take: 10,
+  });
+  if (!candidates.length) return null;
+  if (state?.trim()) {
+    const wanted = state.trim().toLowerCase();
+    const inRegion = candidates.filter((area) => area.region.toLowerCase() === wanted);
+    if (inRegion.length === 1) return inRegion[0]!.id;
+    if (inRegion.length > 1) {
+      const exact = inRegion.filter((area) => area.name.toLowerCase() === cityText.toLowerCase());
+      return exact.length === 1 ? exact[0]!.id : null;
+    }
+  }
+  // Without a matching state, only an unambiguous match is used; a wrong saved area
+  // is worse than none.
+  if (new Set(candidates.map((area) => area.region.toLowerCase())).size > 1) return null;
+  const exact = candidates.filter((area) => area.name.toLowerCase() === cityText.toLowerCase());
+  return (exact[0] ?? candidates[0])!.id;
+}
+
+async function applyPersonalFields(
+  tx: Prisma.TransactionClient,
+  patientId: string,
+  accountId: string,
+  input: Partial<Record<PersonalInputKey, string | null | undefined>>,
+) {
+  const { write, clear } = personalEntries(input);
+  const written = await writeFieldValues(tx, patientId, accountId, write);
+  if (clear.length) {
+    await tx.patientFieldValue.deleteMany({
+      where: { patient_id: patientId, field_key: { in: clear } },
+    });
+  }
+
+  if (input.city != null || input.state != null) {
+    const stored = await tx.patientFieldValue.findMany({
+      where: { patient_id: patientId, field_key: { in: ['city', 'state'] } },
+      select: { field_key: true, value: true },
+    });
+    const value = (key: string) => {
+      const entry = stored.find((item) => item.field_key === key)?.value;
+      return typeof entry === 'string' ? entry : null;
+    };
+    const areaId = await resolveHomeArea(tx, value('city'), value('state'));
+    await tx.patientProfile.update({
+      where: { id: patientId },
+      data: { home_area_id: areaId },
+    });
+  }
+
+  return [...written, ...clear];
+}
+
 async function currentAccount(accountId: string): Promise<CurrentAccount> {
   const account = await prisma.account.findUnique({
     where: { id: accountId },
@@ -268,6 +400,7 @@ export async function loadMe(accountId: string) {
           id: true,
           preferred_language: true,
           home_area_id: true,
+          home_area: { select: { id: true, name: true, city: true, region: true, country_code: true } },
           version: true,
           created_at: true,
           updated_at: true,
@@ -332,6 +465,7 @@ export async function loadMe(accountId: string) {
           id: profile.id,
           preferred_language: profile.preferred_language,
           home_area_id: profile.home_area_id,
+          home_area: profile.home_area,
           version: profile.version,
           created_at: profile.created_at,
           updated_at: profile.updated_at,
@@ -360,15 +494,18 @@ export async function updateProfile(accountId: string, input: ProfilePatch) {
   if (input.dob != null) {
     fields.push(['date_of_birth', dateOnly(input.dob)]);
   }
-  for (const key of ['city', 'state', 'country'] as const) {
-    const value = textOrUndefined(input[key]);
-    if (value) fields.push([key, value]);
-  }
 
   try {
     await prisma.$transaction(async (tx) => {
       const profile = await ensurePatientProfile(tx, accountId);
       await writeFieldValues(tx, profile.id, accountId, fields);
+      await applyPersonalFields(tx, profile.id, accountId, input);
+      if (input.preferredLanguage) {
+        await tx.patientProfile.update({
+          where: { id: profile.id },
+          data: { preferred_language: input.preferredLanguage },
+        });
+      }
       if (Object.keys(data).length > 0) {
         await tx.account.update({ where: { id: accountId }, data });
       }
@@ -406,7 +543,6 @@ export async function updateMedical(
 
   if (input.height != null) addText('height', String(input.height));
   if (input.weight != null) addText('weight', String(input.weight));
-  addText('gender', input.gender);
   addText('blood_pressure', input.bloodPressure);
   addText('blood_group', input.bloodType);
   addText('genotype', input.genoType);
@@ -414,9 +550,6 @@ export async function updateMedical(
   addList('current_medications', input.existingMedications);
   addText('emergency_contact_name', input.emergencyContactName);
   addText('emergency_contact_phone', input.emergencyContactPhone);
-  for (const key of ['city', 'state', 'country'] as const) {
-    addText(key, input[key]);
-  }
 
   let patientId = '';
   let writtenFields: string[] = [];
@@ -425,12 +558,23 @@ export async function updateMedical(
     const result = await prisma.$transaction(async (tx) => {
       const profile = await ensurePatientProfile(tx, accountId);
       const written = await writeFieldValues(tx, profile.id, accountId, fields);
+      written.push(...(await applyPersonalFields(tx, profile.id, accountId, input)));
 
       if (Object.keys(data).length > 0) {
         await tx.account.update({ where: { id: accountId }, data });
       }
 
       if (Array.isArray(input.allergies)) {
+        // Keep the shareable "Allergies" record field in step with the allergy history,
+        // so emergency summaries and quick shares include what the patient entered.
+        const names = [...new Set(input.allergies.map((allergy) => allergy.name.trim()).filter(Boolean))];
+        if (names.length) {
+          written.push(...(await writeFieldValues(tx, profile.id, accountId, [['allergies', names]])));
+        } else {
+          await tx.patientFieldValue.deleteMany({
+            where: { patient_id: profile.id, field_key: 'allergies' },
+          });
+        }
         await tx.allergy.deleteMany({ where: { patient_id: profile.id } });
         if (input.allergies.length > 0) {
           await tx.allergy.createMany({
@@ -498,10 +642,28 @@ export async function removeAllergy(accountId: string, allergyId: string) {
     select: { id: true },
   });
   if (!profile) return false;
-  const deleted = await prisma.allergy.deleteMany({
-    where: { id: allergyId, patient_id: profile.id },
+  return prisma.$transaction(async (tx) => {
+    const deleted = await tx.allergy.deleteMany({
+      where: { id: allergyId, patient_id: profile.id },
+    });
+    if (deleted.count === 0) return false;
+    // The shareable "Allergies" field mirrors the allergy list, so a removed allergy
+    // must not keep appearing in emergency summaries or quick shares.
+    const remaining = await tx.allergy.findMany({
+      where: { patient_id: profile.id },
+      orderBy: { created_at: 'asc' },
+      select: { name: true },
+    });
+    const names = [...new Set(remaining.map((allergy) => allergy.name.trim()).filter(Boolean))];
+    if (names.length) {
+      await writeFieldValues(tx, profile.id, accountId, [['allergies', names]]);
+    } else {
+      await tx.patientFieldValue.deleteMany({
+        where: { patient_id: profile.id, field_key: 'allergies' },
+      });
+    }
+    return true;
   });
-  return deleted.count > 0;
 }
 
 export async function removeMedicalEvent(accountId: string, eventId: string) {

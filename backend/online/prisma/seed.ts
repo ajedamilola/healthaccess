@@ -20,6 +20,13 @@ const fields = [
   ['genotype', 'Genotype', 'STRING', false, 130],
   ['existing_conditions', 'Existing conditions', 'STRING_ARRAY', false, 140],
   ['existing_medications', 'Existing medications', 'STRING_ARRAY', false, 150],
+  ['city', 'City or town', 'STRING', false, 160],
+  ['state', 'State or region', 'STRING', false, 170],
+  ['country', 'Country', 'STRING', false, 180],
+  ['pregnancy_status', 'Pregnancy status', 'STRING', true, 190],
+  ['smoking_status', 'Smoking', 'STRING', false, 200],
+  ['alcohol_use', 'Alcohol use', 'STRING', false, 210],
+  ['activity_level', 'Physical activity', 'STRING', false, 220],
 ] as const;
 
 const services = [
@@ -28,9 +35,11 @@ const services = [
   ['maternity', 'Maternity care', 'Pregnancy and maternity care', 30],
 ] as const;
 
-const DEMO_AREA_ID = '20000000-0000-4000-8000-000000000001';
-const DEMO_HOSPITAL_ID = '20000000-0000-4000-8000-000000000002';
-const DEMO_CLINIC_ID = '20000000-0000-4000-8000-000000000003';
+const IKEJA_AREA_ID = '20000000-0000-4000-8000-000000000001';
+const LEGACY_DEMO_FACILITY_IDS = [
+  '20000000-0000-4000-8000-000000000002',
+  '20000000-0000-4000-8000-000000000003',
+];
 const DEMO_ACCOUNT_ID = '20000000-0000-4000-8000-000000000004';
 const DEMO_PATIENT_ID = '20000000-0000-4000-8000-000000000005';
 
@@ -64,7 +73,7 @@ function cryptoFromEnv() {
 
 async function seedDirectory() {
   await prisma.area.upsert({
-    where: { id: DEMO_AREA_ID },
+    where: { id: IKEJA_AREA_ID },
     update: {
       country_code: 'NG',
       region: 'Lagos',
@@ -72,83 +81,26 @@ async function seedDirectory() {
       name: 'Ikeja',
       center_latitude: '6.601800',
       center_longitude: '3.351500',
-      is_demo: true,
+      is_demo: false,
       active: true,
     },
     create: {
-      id: DEMO_AREA_ID,
+      id: IKEJA_AREA_ID,
       country_code: 'NG',
       region: 'Lagos',
       city: 'Ikeja',
       name: 'Ikeja',
       center_latitude: '6.601800',
       center_longitude: '3.351500',
-      is_demo: true,
+      is_demo: false,
       active: true,
     },
   });
 
-  const facilities = [
-    {
-      id: DEMO_HOSPITAL_ID,
-      name: 'Demo Community Hospital',
-      address: '1 Demo Road, Ikeja, Lagos',
-      latitude: '6.604100',
-      longitude: '3.348900',
-    },
-    {
-      id: DEMO_CLINIC_ID,
-      name: 'Demo Child Health Clinic',
-      address: '2 Demo Close, Ikeja, Lagos',
-      latitude: '6.599200',
-      longitude: '3.355700',
-    },
-  ] as const;
-
-  for (const facility of facilities) {
-    await prisma.facility.upsert({
-      where: { id: facility.id },
-      update: {
-        name: facility.name,
-        address: facility.address,
-        area_id: DEMO_AREA_ID,
-        latitude: facility.latitude,
-        longitude: facility.longitude,
-        status: 'APPROVED',
-        is_demo: true,
-        last_verified_at: new Date(),
-        verified_at: new Date(),
-      },
-      create: {
-        id: facility.id,
-        name: facility.name,
-        address: facility.address,
-        area_id: DEMO_AREA_ID,
-        latitude: facility.latitude,
-        longitude: facility.longitude,
-        status: 'APPROVED',
-        is_demo: true,
-        last_verified_at: new Date(),
-        verified_at: new Date(),
-      },
-    });
-
-    for (const service_code of ['general', 'pediatrics'] as const) {
-      await prisma.facilityService.upsert({
-        where: { facility_id_service_code: { facility_id: facility.id, service_code } },
-        update: {
-          verification_status: 'APPROVED',
-          verified_at: new Date(),
-        },
-        create: {
-          facility_id: facility.id,
-          service_code,
-          verification_status: 'APPROVED',
-          verified_at: new Date(),
-        },
-      });
-    }
-  }
+  // Remove facilities created by earlier demo seeds. Directory search already
+  // excludes is_demo rows, but cleaning them keeps developer databases honest.
+  await prisma.facility.deleteMany({ where: { id: { in: LEGACY_DEMO_FACILITY_IDS } } });
+  await prisma.facility.deleteMany({ where: { area_id: IKEJA_AREA_ID, is_demo: true } });
 }
 
 async function seedDemoPatient(crypto: ReturnType<typeof createCrypto>) {
@@ -181,13 +133,13 @@ async function seedDemoPatient(crypto: ReturnType<typeof createCrypto>) {
     where: { account_id: DEMO_ACCOUNT_ID },
     update: {
       id: DEMO_PATIENT_ID,
-      home_area_id: DEMO_AREA_ID,
+      home_area_id: IKEJA_AREA_ID,
       preferred_language: 'en',
     },
     create: {
       id: DEMO_PATIENT_ID,
       account_id: DEMO_ACCOUNT_ID,
-      home_area_id: DEMO_AREA_ID,
+      home_area_id: IKEJA_AREA_ID,
       preferred_language: 'en',
     },
   });
@@ -251,7 +203,7 @@ async function main() {
   await seedDemoPatient(cryptoFromEnv());
 
   console.log(`Seeded ${fields.length} field definitions and ${services.length} services.`);
-  console.log('Seeded demo directory fixtures: Ikeja area, 2 approved facilities.');
+  console.log('Seeded real Ikeja, Lagos area (is_demo false); no demo facilities are created.');
   console.log('Demo fixtures:');
   console.log(`  email: ${DEMO_EMAIL}`);
   console.log(`  password: ${DEMO_PASSWORD}`);

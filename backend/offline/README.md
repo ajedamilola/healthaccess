@@ -90,8 +90,10 @@ DATABASE_URL='postgresql://ADMIN:password@localhost:5432/healthaccess' npm run d
 DATABASE_URL='postgresql://ADMIN:password@localhost:5432/healthaccess' npm run db:seed-demo
 ```
 
-The demo seed creates `Ikeja demo area`, two fictional facilities, and demo patient
-code `123456789012`. Demo facilities are labeled `DEMO` in USSD and SMS.
+The demo seed creates a real, searchable `Ikeja` area (not demo-flagged), reference
+field definitions and services, and demo patient code `123456789012` for sandbox auth
+only. It creates no facility fixtures: facility results come from approved non-demo
+directory rows or from live Serper search, and demo rows are always excluded.
 
 2. Start both processes in separate terminals:
 
@@ -120,16 +122,28 @@ ngrok http 3001
 
 Suggested USSD path: dial, choose `1`, choose `2` for child health, enter `Ikeja`.
 Emergency summary: dial, choose `2`, enter `123456789012`.
+Live emergency help: dial, choose `4`, briefly describe what is happening, then
+enter `Ikeja`. The description and area are used in live search; do not enter
+names or codes. Results are unverified leads with 112 guidance and `1. Next`
+paging. Call 112 immediately for a life-threatening emergency; do not wait for
+search results.
 Suggested SMS: `HELP`, `FIND child health near Ikeja`, `LOOKUP 123456789012`,
-`MORE`, `CANCEL`, `STOP`. The worker must be running to process SMS and send replies.
+`EMERGENCY Ikeja`, `EMERGENCY near Ikeja`, `MORE`, `CANCEL`, `STOP`. The worker must be
+running to process SMS and send replies.
 
 ## User Flows
 
 - SMS: `HELP`, `FIND child health near Ikeja`, `LOOKUP <12-digit code>`,
-  `ASK <general health question>`, `MORE`, `CANCEL`, `STOP`.
-- USSD: nearby care, patient-selected emergency summary, and additional selected
-  details using both the patient code and a live USSD-enabled temporary grant.
-- USSD uses database directory data only. It never waits on a model or web search.
+  `EMERGENCY [near] <area>`, `ASK <general health question>`, `MORE`, `CANCEL`, `STOP`.
+- USSD: nearby care, live emergency help with 112 guidance, patient-selected emergency
+  summary, and additional selected details using both the patient code and a live
+  USSD-enabled temporary grant.
+- When the approved directory has no non-demo facility for an area, care search falls
+  back to live Serper web leads that are clearly labeled unverified. Emergency help
+  always calls Serper Maps for "emergency hospital" and "ambulance service" in parallel.
+  If live search is unavailable, the reply tells the user to call 112 or go to the
+  nearest emergency department; no facility is ever invented.
+- Emergency requests are recorded best-effort (`EmergencyRequest` channel SMS/USSD).
 - Every protected page, including a repeated callback, checks current permissions.
   Additional grant details are never automatically forwarded by SMS.
 
@@ -157,6 +171,25 @@ model/search context. Free-text users can still volunteer identifying informatio
 this is not a guarantee of automatic de-identification. Review provider data
 handling and consent before processing real patient messages.
 
+## HTTP request logs
+
+Every request writes one JSON line through `logger.info`:
+
+```json
+{"event":"http_request","requestId":"...","method":"POST","url":"/callbacks/africastalking/[token]/sms/inbound","status":200,"duration_ms":12,"body":{"id":"AT1","from":"+2348000000000","to":"1234","text":"HELP"}}
+```
+
+- The callback token path segment is always redacted; query-string token/key/secret
+  values are redacted too.
+- `LOG_HTTP_BODIES` controls the body: `off`, `redacted` or `full`.
+- Development defaults to `full`; production defaults to `redacted` when unset.
+- `redacted` masks phone numbers (`***1234`), replaces SMS/USSD text with
+  `[redacted N chars]` and shortens session ids.
+- `full` includes phone numbers and health text. Use it only for local debugging
+  and never in production or a shared log pipeline. `backend/offline/.env.example`
+  sets `full` for local runs.
+- Health checks are logged too; filter on `event: "http_request"` and `url`.
+
 ## Verification
 
 ```sh
@@ -169,9 +202,9 @@ npm run build
 `test:db` uses `TEST_DATABASE_URL` or `DATABASE_URL` from `.env`; it runs the
 shared Prisma migrations' public schema and removes its own fixtures. Use a
 disposable database that already has `npm run db:migrate` applied. Never point it
-at a live database. Logs omit
-callback bodies, medical values, access codes and credentials. Disable body/URL
-logging at proxies and tracing systems too.
+at a live database. Keep `LOG_HTTP_BODIES=redacted` or `off` in production; full
+bodies contain phone numbers and health text. Disable body/URL logging at proxies
+and tracing systems too.
 
 Before a real pilot, verify the provisioned callback fixtures, provider IP controls,
 operator menu/deadline limits, directory/clinical content, delivery reports and
@@ -182,3 +215,35 @@ Provider contracts were checked against the official [SMS notifications](https:/
 [SMS sending](<https://developers.africastalking.com/docs/sms/sending/bulk_(legacy)>),
 [USSD sessions](https://developers.africastalking.com/docs/ussd/handle_sessions), and
 [USSD events](https://developers.africastalking.com/docs/ussd/notifications) documentation.
+
+## Simulating Africa's Talking locally
+
+`npm run simulate` (from `backend/offline`) runs the real callback server, the real
+repository and three SMS worker replicas against `DATABASE_URL`, then posts the same
+webhooks Africa's Talking sends (shortcode 55892, USSD `*384*1#`) from many phones at
+once. Only external services are stand-ins: the AI model, Serper search and the SMS
+gateway (which records every outgoing message). It prints each conversation and a
+PASS/FAIL per scenario. Set `SIM_LOAD=40` to add 40 extra concurrent phones. Use a
+test database: it creates and removes a test patient.
+
+Tuning (optional env): `AI_TIMEOUT_MS` (default 25000, capped so two AI calls fit the
+90 s worker lease), `SMS_CONVERSATION_TTL_SECONDS` (default 1800),
+`CALLBACK_RATE_PER_MINUTE` (provider-IP flood ceiling, default 6000; each sender phone
+is limited to 60 callbacks a minute).
+
+## Languages and output control
+
+SMS and USSD speak English, Nigerian Pidgin, Yoruba, Hausa and Igbo
+(`src/channels/i18n.ts`). A phone's language comes from its SMS/USSD choice (`LANG`,
+a language name, or USSD option 5), else the verified patient's profile language,
+else English; greetings such as "Bawo", "Sannu", "Ndewo" or "How far" switch it.
+The AI is told the reply language. Translations are plain ASCII (no tone marks) and
+should be reviewed by native speakers.
+
+Every SMS passes through `channelText` before sending: links, web addresses, emails,
+markdown and emoji are removed and letters are folded to GSM-7. Listings carry no
+map links; web answers name their source in words ("Source: NHS").
+
+For a real-model run of the simulator: `SIM_REAL_AI=1 OPENROUTER_API_KEY=...
+OPENROUTER_MODEL=... npm run simulate` (behind an HTTP proxy, also set
+`NODE_USE_ENV_PROXY=1`).

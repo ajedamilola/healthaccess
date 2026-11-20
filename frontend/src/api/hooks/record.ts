@@ -5,6 +5,7 @@ import { z } from "zod";
 import { request } from "../client";
 import { qk } from "../keys";
 import {
+  assistantContextSchema,
   emergencyFieldsResponseSchema,
   emergencySummarySchema,
   fieldsResponseSchema,
@@ -13,6 +14,7 @@ import {
   patchMedicalEventBodySchema,
   putEmergencyFieldsBodySchema,
   putFieldsBodySchema,
+  type AssistantContext,
   type EmergencyFieldsResponse,
   type EmergencySummary,
   type FieldsResponse,
@@ -54,6 +56,16 @@ export function useMe() {
   });
 }
 
+/** What the symptom assistant knows about the patient and what is missing. */
+export function useAssistantContext(enabled = true) {
+  return useQuery({
+    queryKey: qk.assistantContext,
+    queryFn: () =>
+      request<AssistantContext>({ method: "GET", url: "/me/assistant-context" }, assistantContextSchema),
+    enabled,
+  });
+}
+
 export function useEmergencySummary() {
   return useQuery({
     queryKey: qk.emergency,
@@ -73,6 +85,7 @@ export function useUpdateMe() {
       );
       void queryClient.invalidateQueries({ queryKey: qk.fields });
       void queryClient.invalidateQueries({ queryKey: qk.emergency });
+      void queryClient.invalidateQueries({ queryKey: qk.assistantContext });
     },
   });
 }
@@ -84,6 +97,7 @@ export function usePutMedical() {
       request<MeResponse>({ method: "PUT", url: "/me/medical", data: body }, meResponseSchema),
     onSuccess: (data) => {
       queryClient.setQueryData(qk.me, data);
+      void queryClient.invalidateQueries({ queryKey: qk.assistantContext });
       void queryClient.invalidateQueries({ queryKey: qk.fields });
       void queryClient.invalidateQueries({ queryKey: qk.emergency });
     },

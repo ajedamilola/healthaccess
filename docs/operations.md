@@ -44,7 +44,7 @@ names without values.
 | `GROQ_API_KEY`             | no          | Groq provider.                                                          |
 | `OPENROUTER_API_KEY`       | no          | OpenRouter provider (preferred when set).                               |
 | `OPENROUTER_MODEL`         | no          | OpenRouter model slug; default `deepseek/deepseek-chat`.                |
-| `SERPER_API_KEY`           | no          | Web search.                                                             |
+| `SERPER_API_KEY`           | no          | Live directory and emergency search (Serper Maps/web).                  |
 | `CHAT_MODEL`               | no          | Symptom chat model key; default `geminiFlash`.                          |
 | `MEDICATION_SCHEDULER_MODEL` | no        | Medication agent model key; default `haiku`.                            |
 | `FCM_ENABLED`              | no          | `true` enables Firebase push.                                           |
@@ -73,9 +73,10 @@ names without values.
 | `AT_USSD_SERVICE_CODE` | yes             | Exact provisioned USSD code, including `*` and `#`.                                                  |
 | `OPENROUTER_API_KEY`   | no              | Enables the offline SMS AI when paired with a model.                                                 |
 | `OPENROUTER_MODEL`     | no              | Explicit OpenRouter model id; set with the key.                                                      |
-| `SERPER_API_KEY`       | no              | Enables web search and unverified facility leads.                                                    |
+| `SERPER_API_KEY`       | no              | Enables live emergency/care search and unverified facility leads.                                   |
 | `NODE_ENV`             | yes             | `development`, `test` or `production`.                                                               |
 | `PORT`                 | no              | HTTP port; default `3001`.                                                                           |
+| `LOG_HTTP_BODIES`      | no              | Request body logging: `off`, `redacted` or `full`. Development default `full`; production default `redacted`. |
 | `CALLBACK_ALLOWED_IPS` | production      | Comma-separated provider egress CIDRs.                                                               |
 | `HOST`                 | no              | Listen address; loopback by default in development, `0.0.0.0` in production.                         |
 
@@ -185,7 +186,7 @@ with PostgreSQL 16 and Redis 7 included. S3/MinIO is not included.
 
 ```sh
 docker compose up -d --build
-docker compose run --rm online npm run db:seed   # optional demo fixtures
+docker compose run --rm online npm run db:seed   # optional seed and sandbox patient
 docker compose ps
 docker compose logs -f online
 ```
@@ -301,17 +302,22 @@ cloudflared tunnel --url http://localhost:3001
 
 Suggested USSD path: dial, choose `1` (Find nearby care), choose `2` (Child
 health), enter `Ikeja`. Emergency summary: dial, choose `2`, enter the demo
-patient code `123456789012`.
+patient code `123456789012`. Emergency help: dial, choose `4`, enter `Ikeja` to
+search live emergency hospitals and ambulance services (requires `SERPER_API_KEY`).
 
 Suggested SMS: `HELP`, `FIND child health near Ikeja`, `LOOKUP 123456789012`,
-`MORE`, `CANCEL`, `STOP`.
+`EMERGENCY near Ikeja`, `MORE`, `CANCEL`, `STOP`.
 
-The Prisma seed creates demo area/facility/patient fixtures marked `is_demo`,
-with demo login `demo.patient@example.test` / `DemoPass123!` and patient code
-`123456789012`. These are fixtures only. Do not present them as a real facility
-directory or reuse the credentials outside a demo database.
-`backend/offline/scripts/seed-demo.ts` writes the same Prisma fixtures for
-offline sandbox testing; the online seed is the canonical setup step.
+The Prisma seed creates reference fields/services, a real `Ikeja, Lagos` area
+(`is_demo = false`) and an optional demo patient for sandbox auth
+(`demo.patient@example.test` / `DemoPass123!`, patient code `123456789012`). It
+does not create demo facilities. Directory and care-search results come from
+approved non-demo facilities plus live Serper Maps leads. Live leads are
+unverified contact information, never approved directory rows, and must not be
+presented as verified facilities. Without `SERPER_API_KEY`, live search is
+unavailable and only approved non-demo facilities can be returned.
+`backend/offline/scripts/seed-demo.ts` writes the same reference area and demo
+patient for offline sandbox testing; the online seed is the canonical setup step.
 
 ## Tests and CI
 
@@ -325,7 +331,7 @@ npm run test --workspace @healthaccess/offline
 ```
 
 Current results: workspace typecheck is clean, shared tests pass 4/4 and the
-offline unit suite passes 71/71.
+offline unit suite passes 85/85.
 
 Online feature tests are DB integration tests. They use PostgreSQL and the
 Prisma client, so CI excludes them:
@@ -335,8 +341,9 @@ cd backend/online
 node --env-file-if-exists=.env --test --import tsx tests/*.test.ts
 ```
 
-The online suite covers schema, auth, users, portal, directory, symptom,
-medications and reminders and currently passes 78 tests in the local database.
+The online suite covers schema, auth, users, portal, directory, emergency,
+symptom, medications and reminders and currently passes 108 tests in the local
+database.
 
 The offline DB suite uses the Prisma schema and needs a disposable database:
 
@@ -386,7 +393,8 @@ provision PostgreSQL and does not run the DB integration suites.
   administrator URL at runtime.
 - Use a least-privilege database login. The architecture does not rely on
   database roles for channel selection, but the login still must not be a
-  superuser.
+  superuser. The included compose uses the `healthaccess` owner account for
+  simplicity; replace it with a dedicated login for production.
 - Run Prisma migrations with `prisma migrate deploy` in a controlled job; back up
   before applying.
 - Back up the database and both cryptographic keys securely. Changing keys is a

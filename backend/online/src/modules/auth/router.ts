@@ -8,6 +8,7 @@ import { requireAuth } from '../../middleware/auth.js';
 import { AppError } from '../../middleware/error.js';
 import { completeGoogleSignIn, googleAuthorizationUrl } from './google.js';
 import { beginPhoneVerification, confirmPhoneVerification } from './phone.js';
+import { requestPasswordReset, resetPassword } from './password-reset.js';
 import { hashIp, issueSession, revokeRefreshToken, rotateRefreshToken } from './tokens.js';
 
 export const authRouter = Router();
@@ -55,6 +56,17 @@ const phoneConfirmSchema = z.object({
   phone: phoneSchema,
   code: z.string().trim().regex(/^\d{6}$/, 'Code must be 6 digits'),
 });
+const forgotPasswordSchema = z.object({ email: emailSchema });
+const resetPasswordSchema = z
+  .object({
+    token: z.string().min(40).max(128),
+    password: z.string().min(8).max(128),
+    password_confirmation: z.string().min(8).max(128),
+  })
+  .refine((value) => value.password === value.password_confirmation, {
+    path: ['password_confirmation'],
+    message: 'Passwords do not match',
+  });
 
 function sessionContext(req: {
   headers: Record<string, unknown>;
@@ -185,6 +197,18 @@ authRouter.post('/login', async (req, res) => {
     roles: account.roles.map((role) => role.role),
     tokens,
   });
+});
+
+authRouter.post('/forgot-password', async (req, res) => {
+  const input = forgotPasswordSchema.parse(req.body);
+  const result = await requestPasswordReset(input.email);
+  res.status(202).json(result);
+});
+
+authRouter.post('/reset-password', async (req, res) => {
+  const input = resetPasswordSchema.parse(req.body);
+  const result = await resetPassword(input.token, input.password);
+  res.json(result);
 });
 
 authRouter.post('/refresh', async (req, res) => {

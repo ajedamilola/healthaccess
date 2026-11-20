@@ -9,7 +9,7 @@ type RetriableConfig = AxiosRequestConfig & { __haRetried?: boolean };
 
 let refreshPromise: Promise<void> | null = null;
 
-function redirectToLogin() {
+export function redirectToLogin() {
   if (typeof window === "undefined") return;
   const next = window.location.pathname;
   window.location.replace(`/login?next=${encodeURIComponent(next)}`);

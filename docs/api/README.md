@@ -41,7 +41,8 @@ password: DemoPass123!
 code:     123456789012
 ```
 
-Run `npm run db:seed` if the account is missing. The login example uses these
+Run `npm run db:seed` if the account is missing; in Docker use
+`docker compose run --rm online npm run db:seed`. The login example uses these
 credentials. Captured response examples use the demo account or cleared test
 accounts, with `<access-jwt>` / `<refresh-token>` placeholders; they never contain
 live tokens. When you run login yourself, the response viewer shows the real token
@@ -52,10 +53,11 @@ screenshots.
 
 | Group | Endpoints |
 | --- | --- |
-| Authentication and profile | register, login, refresh, logout, phone begin/confirm, me, medical, avatar, allergy/event edits |
+| Authentication and profile | register, login, forgot/reset password, refresh, logout, phone begin/confirm, me, medical, avatar, allergy/event edits |
 | Patient portal and protected records | fields, emergency summary, patient code, grants, consents, access events, emergency/grant reads |
-| Directory | services, areas, facilities, facility detail |
-| Symptom analysis | create, list, get, follow-up, update, delete |
+| Directory | services, areas, approved/non-demo facilities plus live Serper leads, facility/web-lead detail |
+| Emergency | request live emergency search, list history, get one request |
+| Symptom analysis | create, list, get, SSE stream, follow-up (+stream), update, delete |
 | Medications and reminders | structured and AI creates, list, get, moments, add/remove, device registration, delete |
 
 Error examples cover the validation, auth, role, ownership, conflict and

@@ -1,7 +1,24 @@
 /*
- * Arc dashboard theme. Only the tokens approved in scope.md §6 are overridden.
- * Contrast checked against the landing palette: fog 14.4:1, fog-muted 7:1, text-muted 5.7:1 on night.
+ * HealthAccess app palettes. Shared Arc components inherit these semantic tokens.
  */
+:root[data-theme="light"][data-accent="green"] {
+  --background: #f3f7f4;
+  --surface: #ffffff;
+  --surface-muted: #eaf0ec;
+  --surface-raised: #ffffff;
+  --border: #dce5df;
+  --border-subtle: #e3eae5;
+  --border-strong: #a2b8ac;
+  --foreground: #183d35;
+  --text-secondary: #465f55;
+  --text-muted: #5a6e67;
+  --accent: #17644f;
+  --accent-strong: #104b3b;
+  --accent-subtle: rgb(23 100 79 / 0.1);
+  --accent-foreground: #ffffff;
+  --control-on: #17644f;
+}
+
 :root[data-theme="dark"][data-accent="green"] {
   --background: #070d0e;
   --surface: #0e1719;

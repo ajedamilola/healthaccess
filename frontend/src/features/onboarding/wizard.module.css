@@ -1,0 +1,131 @@
+.page {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+  max-width: 620px;
+  margin: clamp(0px, 4vh, 40px) auto;
+}
+
+.card {
+  display: grid;
+  gap: 16px;
+  padding: clamp(20px, 4vw, 32px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  background: var(--surface);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-geist), var(--font-inter), sans-serif;
+  font-size: clamp(1.4rem, 3vw, 1.85rem);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.lead {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.benefits {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  list-style: disc;
+}
+
+.benefits li::marker {
+  color: var(--accent);
+}
+
+.fields {
+  display: grid;
+  gap: 16px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.topBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stepCount {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.skipAll {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.skipAll:hover {
+  color: var(--foreground);
+  border-color: var(--border-strong);
+}
+
+.progress {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.progress span {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border-subtle);
+  transition: background 200ms ease;
+}
+
+.progress span[data-active] {
+  background: var(--accent);
+}
+
+.footnote {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

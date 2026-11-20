@@ -1,0 +1,412 @@
+{
+  "group": "Emergency",
+  "order": 35,
+  "description": "Emergency service lookup backed by live Serper search. Requests are scoped to the authenticated account's patient profile, persisted as emergency_requests and audited without location text or PHI. Live results are unverified; HealthAccess does not dispatch ambulances.",
+  "endpoints": [
+    {
+      "id": "emergency-create",
+      "name": "Request emergency services",
+      "method": "POST",
+      "path": "/emergency",
+      "summary": "Search for nearby emergency hospitals and ambulance services and record the request.",
+      "description": "Requires a bearer token and a patient profile. Requires one of location, area_id, or a latitude/longitude pair; missing location fields fall back to the patient's home area. The area id must belong to an active area. Serper Maps is searched for emergency hospitals and/or ambulance services, results are persisted in the request record, and the request is audited with kind, status and result_count only. If the search provider is unconfigured the endpoint returns 503 search_unavailable before writing anything. If the configured search fails, the request is stored with status FAILED. An empty search stores status NO_MATCH and returns 201 with empty results. Always show the 112 guidance to the user.",
+      "auth": "bearer",
+      "roles": [],
+      "contentType": "application/json",
+      "bodyExample": {
+        "kind": "both",
+        "location": "Allen Avenue, Ikeja",
+        "area_id": "20000000-0000-4000-8000-000000000001",
+        "latitude": 6.6018,
+        "longitude": 3.3515,
+        "note": "Patient collapsed at the market gate"
+      },
+      "bodyFields": [
+        {
+          "name": "kind",
+          "type": "string",
+          "required": false,
+          "description": "hospital, ambulance or both. Default both."
+        },
+        {
+          "name": "location",
+          "type": "string",
+          "required": false,
+          "description": "Free-text area or landmark, 1-160 characters. Used as the search area and stored as location_text."
+        },
+        {
+          "name": "area_id",
+          "type": "uuid",
+          "required": false,
+          "description": "Area id from /directory/areas. Unknown or inactive ids return 404."
+        },
+        {
+          "name": "latitude",
+          "type": "number",
+          "required": false,
+          "description": "-90 to 90. Provide together with longitude."
+        },
+        {
+          "name": "longitude",
+          "type": "number",
+          "required": false,
+          "description": "-180 to 180. Provide together with latitude."
+        },
+        {
+          "name": "note",
+          "type": "string",
+          "required": false,
+          "description": "Optional operator note, max 500 characters. It is not persisted or audited."
+        }
+      ],
+      "responses": [
+        {
+          "status": 201,
+          "label": "Created",
+          "description": "Search matched at least one live result. Results are unverified and include a source_url.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "request": {
+              "id": "0b3f6a52-9a1d-4f7e-8c2b-1d3e5f7a9b0c",
+              "patient_id": "20000000-0000-4000-8000-000000000005",
+              "channel": "WEB",
+              "kind": "both",
+              "status": "MATCHED",
+              "area_id": "20000000-0000-4000-8000-000000000001",
+              "location_text": "Allen Avenue, Ikeja",
+              "latitude": 6.6018,
+              "longitude": 3.3515,
+              "results": [
+                {
+                  "name": "Lagos Emergency Hospital Ikeja",
+                  "address": "12 Allen Avenue, Ikeja, Lagos",
+                  "phone": "+2348033333333",
+                  "latitude": 6.5966,
+                  "longitude": 3.3512,
+                  "source_url": "https://maps.google.com/?cid=12345678901234567890",
+                  "source_reference": "ChIJexamplePlaceId",
+                  "service_label": "Emergency hospital",
+                  "verification_status": "unverified",
+                  "kind": "emergency",
+                  "distance_km": 0.603
+                }
+              ],
+              "created_at": "2026-11-17T22:15:00.000Z"
+            },
+            "results": [
+              {
+                "name": "Lagos Emergency Hospital Ikeja",
+                "address": "12 Allen Avenue, Ikeja, Lagos",
+                "phone": "+2348033333333",
+                "latitude": 6.5966,
+                "longitude": 3.3512,
+                "source_url": "https://maps.google.com/?cid=12345678901234567890",
+                "source_reference": "ChIJexamplePlaceId",
+                "service_label": "Emergency hospital",
+                "verification_status": "unverified",
+                "kind": "emergency",
+                "distance_km": 0.603
+              }
+            ],
+            "guidance": [
+              "Call 112 now if the situation is life-threatening, someone is unconscious, bleeding heavily, or struggling to breathe.",
+              "Call the nearest facility below and confirm they can accept the patient before travelling.",
+              "HealthAccess does not dispatch ambulances; these are live search results and are not verified by HealthAccess."
+            ]
+          }
+        },
+        {
+          "status": 201,
+          "label": "Created",
+          "description": "Search returned nothing. Status NO_MATCH with empty results; still show the 112 guidance.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "request": {
+              "id": "2c4e8b64-1b3f-4a6d-9e7c-3f5a7b9d1e2f",
+              "patient_id": "20000000-0000-4000-8000-000000000005",
+              "channel": "WEB",
+              "kind": "hospital",
+              "status": "NO_MATCH",
+              "area_id": "20000000-0000-4000-8000-000000000001",
+              "location_text": "Remote village, Ikeja",
+              "latitude": 6.6018,
+              "longitude": 3.3515,
+              "results": [],
+              "created_at": "2026-11-17T22:16:00.000Z"
+            },
+            "results": [],
+            "guidance": [
+              "Call 112 now if the situation is life-threatening, someone is unconscious, bleeding heavily, or struggling to breathe.",
+              "Call the nearest facility below and confirm they can accept the patient before travelling.",
+              "HealthAccess does not dispatch ambulances; these are live search results and are not verified by HealthAccess."
+            ]
+          }
+        },
+        {
+          "status": 400,
+          "label": "Bad Request",
+          "description": "No location, area or coordinate pair was supplied.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "error": "validation_error",
+            "request_id": "1d5e7a93-2c4b-4f6d-8e0a-3b5c7d9e1f2a",
+            "issues": [
+              {
+                "path": "location",
+                "message": "Provide a location, an area_id or both latitude and longitude"
+              }
+            ]
+          }
+        },
+        {
+          "status": 401,
+          "label": "Unauthorized",
+          "description": "Missing or invalid bearer token.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "error": "unauthorized",
+            "message": "Authentication required",
+            "request_id": "3f6a8b04-4d5c-4a7e-9f1b-5c7d9e1f2a3b"
+          }
+        },
+        {
+          "status": 404,
+          "label": "Not Found",
+          "description": "area_id does not match an active area, or the account has no patient profile.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "error": "not_found",
+            "message": "Patient profile not found",
+            "request_id": "5b8c0d26-6e7f-4b9a-8c0d-7e9f1a2b3c4d"
+          }
+        },
+        {
+          "status": 503,
+          "label": "Service Unavailable",
+          "description": "Live search is not configured. Nothing is persisted.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "error": "search_unavailable",
+            "message": "Live facility search is not configured",
+            "request_id": "7d9e1f38-8a9b-4c0d-9e1f-9a2b3c4d5e6f"
+          }
+        }
+      ],
+      "curl": "TOKEN=\"<access-jwt>\"\ncurl -sS -X POST http://localhost:3000/v1/emergency \\\n  -H \"authorization: Bearer $TOKEN\" \\\n  -H 'content-type: application/json' \\\n  -d '{\"kind\":\"both\",\"location\":\"Allen Avenue, Ikeja\",\"area_id\":\"20000000-0000-4000-8000-000000000001\",\"latitude\":6.6018,\"longitude\":3.3515}'",
+      "notes": [
+        "Audit metadata contains only kind, status and result_count; the location text, note, coordinates and phone numbers are never written to the audit event.",
+        "status FAILED is returned as 201 with empty results when the configured provider errors; retry or ask the user to call 112.",
+        "results are persisted on the request, so GET /emergency/{id} returns the same snapshot."
+      ]
+    },
+    {
+      "id": "emergency-list",
+      "name": "List emergency requests",
+      "method": "GET",
+      "path": "/emergency",
+      "summary": "Paginated list of the caller's emergency requests, newest first.",
+      "description": "Returns requests scoped to the authenticated account, ordered by created_at descending. page is 1-based and limit is clamped to 1-50 (default 10).",
+      "auth": "bearer",
+      "roles": [],
+      "queryParams": [
+        {
+          "name": "page",
+          "type": "integer",
+          "required": false,
+          "default": 1,
+          "description": "1-based page. Values below 1 fall back to 1."
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "required": false,
+          "default": 10,
+          "description": "Page size 1-50; values outside the range are clamped."
+        }
+      ],
+      "responses": [
+        {
+          "status": 200,
+          "label": "OK",
+          "description": "Current page of emergency requests.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "requests": [
+              {
+                "id": "0b3f6a52-9a1d-4f7e-8c2b-1d3e5f7a9b0c",
+                "patient_id": "20000000-0000-4000-8000-000000000005",
+                "channel": "WEB",
+                "kind": "both",
+                "status": "MATCHED",
+                "area_id": "20000000-0000-4000-8000-000000000001",
+                "location_text": "Allen Avenue, Ikeja",
+                "latitude": 6.6018,
+                "longitude": 3.3515,
+                "results": [
+                  {
+                    "name": "Lagos Emergency Hospital Ikeja",
+                    "address": "12 Allen Avenue, Ikeja, Lagos",
+                    "phone": "+2348033333333",
+                    "latitude": 6.5966,
+                    "longitude": 3.3512,
+                    "source_url": "https://maps.google.com/?cid=12345678901234567890",
+                    "source_reference": "ChIJexamplePlaceId",
+                    "service_label": "Emergency hospital",
+                    "verification_status": "unverified",
+                    "kind": "emergency",
+                    "distance_km": 0.603
+                  }
+                ],
+                "created_at": "2026-11-17T22:15:00.000Z"
+              }
+            ],
+            "page": 1,
+            "limit": 10,
+            "total": 1,
+            "totalPages": 1
+          }
+        },
+        {
+          "status": 401,
+          "label": "Unauthorized",
+          "description": "Missing or invalid bearer token.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "error": "unauthorized",
+            "message": "Authentication required",
+            "request_id": "9f1a2b3c-4d5e-4f6a-8b9c-1d3e5f7a9b0c"
+          }
+        }
+      ],
+      "curl": "TOKEN=\"<access-jwt>\"\ncurl -sS \"http://localhost:3000/v1/emergency?page=1&limit=10\" \\\n  -H \"authorization: Bearer $TOKEN\"",
+      "notes": [
+        "totalPages is 0 when total is 0.",
+        "Another account's requests are excluded from both items and total."
+      ]
+    },
+    {
+      "id": "emergency-get",
+      "name": "Get one emergency request",
+      "method": "GET",
+      "path": "/emergency/{id}",
+      "summary": "Fetch a stored emergency request and its result snapshot.",
+      "description": "Returns the request, its stored results and the guidance. Requests owned by another account, unknown ids and malformed uuids all return 404 not_found so ownership is not disclosed.",
+      "auth": "bearer",
+      "roles": [],
+      "pathParams": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "required": true,
+          "description": "Emergency request id returned by POST /emergency."
+        }
+      ],
+      "responses": [
+        {
+          "status": 200,
+          "label": "OK",
+          "description": "Stored request, results and guidance.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "request": {
+              "id": "0b3f6a52-9a1d-4f7e-8c2b-1d3e5f7a9b0c",
+              "patient_id": "20000000-0000-4000-8000-000000000005",
+              "channel": "WEB",
+              "kind": "both",
+              "status": "MATCHED",
+              "area_id": "20000000-0000-4000-8000-000000000001",
+              "location_text": "Allen Avenue, Ikeja",
+              "latitude": 6.6018,
+              "longitude": 3.3515,
+              "results": [
+                {
+                  "name": "Lagos Emergency Hospital Ikeja",
+                  "address": "12 Allen Avenue, Ikeja, Lagos",
+                  "phone": "+2348033333333",
+                  "latitude": 6.5966,
+                  "longitude": 3.3512,
+                  "source_url": "https://maps.google.com/?cid=12345678901234567890",
+                  "source_reference": "ChIJexamplePlaceId",
+                  "service_label": "Emergency hospital",
+                  "verification_status": "unverified",
+                  "kind": "emergency",
+                  "distance_km": 0.603
+                }
+              ],
+              "created_at": "2026-11-17T22:15:00.000Z"
+            },
+            "results": [
+              {
+                "name": "Lagos Emergency Hospital Ikeja",
+                "address": "12 Allen Avenue, Ikeja, Lagos",
+                "phone": "+2348033333333",
+                "latitude": 6.5966,
+                "longitude": 3.3512,
+                "source_url": "https://maps.google.com/?cid=12345678901234567890",
+                "source_reference": "ChIJexamplePlaceId",
+                "service_label": "Emergency hospital",
+                "verification_status": "unverified",
+                "kind": "emergency",
+                "distance_km": 0.603
+              }
+            ],
+            "guidance": [
+              "Call 112 now if the situation is life-threatening, someone is unconscious, bleeding heavily, or struggling to breathe.",
+              "Call the nearest facility below and confirm they can accept the patient before travelling.",
+              "HealthAccess does not dispatch ambulances; these are live search results and are not verified by HealthAccess."
+            ]
+          }
+        },
+        {
+          "status": 404,
+          "label": "Not Found",
+          "description": "Unknown id, malformed uuid, or a request owned by another account.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "error": "not_found",
+            "message": "Emergency request not found",
+            "request_id": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e"
+          }
+        },
+        {
+          "status": 401,
+          "label": "Unauthorized",
+          "description": "Missing or invalid bearer token.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "error": "unauthorized",
+            "message": "Authentication required",
+            "request_id": "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f"
+          }
+        }
+      ],
+      "curl": "TOKEN=\"<access-jwt>\"\ncurl -sS http://localhost:3000/v1/emergency/0b3f6a52-9a1d-4f7e-8c2b-1d3e5f7a9b0c \\\n  -H \"authorization: Bearer $TOKEN\"",
+      "notes": [
+        "results is the persisted snapshot; it does not perform a fresh search.",
+        "Always surface the 112 guidance alongside the stored results."
+      ]
+    }
+  ]
+}

@@ -21,7 +21,8 @@
     "db:generate": "prisma generate --schema ../online/prisma/schema.prisma",
     "db:migrate": "prisma migrate deploy --schema ../online/prisma/schema.prisma",
     "keys:generate": "tsx scripts/generate-keys.ts",
-    "db:seed-demo": "node --env-file-if-exists=.env --import tsx scripts/seed-demo.ts"
+    "db:seed-demo": "node --env-file-if-exists=.env --import tsx scripts/seed-demo.ts",
+    "simulate": "node --env-file-if-exists=.env --import tsx scripts/simulate-at.ts"
   },
   "engines": {
     "node": ">=24"

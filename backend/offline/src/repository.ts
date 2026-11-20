@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { Prisma, PrismaClient } from '@prisma/client';
 import {
   buildProjection,
@@ -10,13 +10,17 @@ import {
   type RecordField,
 } from '@healthaccess/shared';
 import type { Config } from './config.js';
+import { EXPLICIT_ENGLISH, toLocale, type Locale } from './channels/i18n.js';
 import type { Crypto } from './security/crypto.js';
 import { prisma as sharedPrisma, prismaFor } from './db.js';
 import type { InboundSms, UssdCallback, UssdEvent } from './app.js';
 import type {
   Area,
   Facility,
+  OwnCodes,
+  PersonalHints,
   Projection,
+  SavedArea,
   Service,
   SmsContext,
   SmsReply,
@@ -152,6 +156,60 @@ function distanceKm(
 
 function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+// Live search providers format Nigerian numbers with spaces, dots or parentheses.
+// Normalize before validation so emergency leads keep their contact number.
+export function normalizePhoneNumber(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const compact = value.trim().replace(/[\s().-]+/g, '');
+  if (!compact) return null;
+  return /^\+[1-9][0-9]{7,14}$/.test(compact) ? compact : null;
+}
+
+const HINT_TEXT = /^[\p{L}\p{N} ,.'()/-]{1,80}$/u;
+
+function hintText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (!text || /\d{6,}/.test(text) || !HINT_TEXT.test(text)) return null;
+  return text;
+}
+
+function hintList(value: unknown): string[] {
+  const items = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
+  return items
+    .map(hintText)
+    .filter((item): item is string => Boolean(item))
+    .slice(0, 8);
+}
+
+export function ageBandFrom(value: unknown, now = new Date()): string | null {
+  if (typeof value !== 'string') return null;
+  const born = new Date(value);
+  if (Number.isNaN(born.getTime()) || born > now) return null;
+  const age = (now.getTime() - born.getTime()) / (365.25 * 864e5);
+  if (age < 1) return 'infant';
+  if (age < 5) return 'young child';
+  if (age < 13) return 'child';
+  if (age < 18) return 'teenager';
+  if (age < 40) return 'adult under 40';
+  if (age < 65) return 'adult 40-64';
+  return 'older adult 65+';
+}
+
+export function personalHintsFrom(fields: RecordField[], language: string): PersonalHints {
+  const value = (key: string) => fields.find((field) => field.key === key)?.value;
+  const merge = (...keys: string[]) => [...new Set(keys.flatMap((key) => hintList(value(key))))];
+  return {
+    ageBand: ageBandFrom(value('date_of_birth')),
+    sex: hintText(value('gender')),
+    pregnancy: hintText(value('pregnancy_status')),
+    conditions: merge('conditions', 'existing_conditions'),
+    allergies: merge('allergies'),
+    medications: merge('current_medications', 'existing_medications'),
+    language: /^[a-z]{2,3}(-[a-z0-9]{2,8})?$/i.test(language) ? language.toLowerCase() : 'en',
+  };
 }
 
 export class Repository {
@@ -293,9 +351,18 @@ export class Repository {
       readGrant: (id) => this.readGrantedRecord(id, actor, database),
       closeReadSession: (id) => this.closeGrantedRecord(id, actor, database),
       findProfileConsent: () => this.findProfileConsent(actor, database),
+      findSavedArea: () => this.findSavedArea(actor, database),
+      readPersonalHints: () => this.readPersonalHints(actor, database),
+      readOwnCodes: () => this.readOwnCodes(actor, database),
+      getLocale: () => this.getLocale(actor, database),
+      setLocale: (locale) => this.setLocale(actor, locale, database),
+      createQuickGrant: (minutes) => this.createQuickGrant(actor, minutes, database),
       readMatchingContext: (id) => this.readProfileContext(id, actor, database),
       setOptOut: (optedOut) => this.setOptOut(database, actor.phone_digest, optedOut),
       storeWebLeads: (leads) => this.storeWebLeads(leads, database),
+      getWebLead: (id) => this.getWebLead(id, database),
+      recordEmergencyRequest: (request) =>
+        this.recordEmergencyRequest({ ...request, request_id: actor.request_id }, database),
       recordReferral: (referral) => this.recordReferral(referral, actor, database),
       queueFacilitySms: async (facilityId) => {
         if (!actor.session_id || !currentPhone) return false;
@@ -448,7 +515,7 @@ export class Repository {
     const existing = found ?? null;
     const conversation =
       existing && existing.expires_at > new Date()
-        ? { state: existing.state, context: existing.context as SmsContext }
+        ? { state: existing.state, context: this.openHistory(existing.context as SmsContext) }
         : { state: 'idle', context: {} };
     const scoped = this.actorRepository(
       { phone_digest: job.phone_digest, request_id: body.requestId },
@@ -469,8 +536,9 @@ export class Repository {
     const result = allowed
       ? await handle(body, scoped, conversation)
       : {
-          state: 'idle',
-          context: {},
+          // Keep the thread (and its memory) so the next message continues it.
+          state: conversation.state,
+          context: conversation.context,
           replies: [
             {
               kind: 'text' as const,
@@ -479,6 +547,7 @@ export class Repository {
           ],
         };
 
+    const storedContext = this.sealHistory(result.context);
     await this.transaction(async (tx) => {
       const currentJob = await tx.$queryRaw<Array<{ id: string }>>(
         Prisma.sql`SELECT id FROM "sms_inbox" WHERE id = ${job.id}::uuid AND claimed_by = ${job.claimed_by}
@@ -497,12 +566,12 @@ export class Repository {
         create: {
           phone_digest: job.phone_digest,
           state: result.state,
-          context: result.context as Prisma.InputJsonValue,
+          context: storedContext as Prisma.InputJsonValue,
           expires_at: new Date(Date.now() + this.config.smsConversationTtlSeconds * 1000),
         },
         update: {
           state: result.state,
-          context: result.context as Prisma.InputJsonValue,
+          context: storedContext as Prisma.InputJsonValue,
           expires_at: new Date(Date.now() + this.config.smsConversationTtlSeconds * 1000),
           version: { increment: 1 },
         },
@@ -783,7 +852,7 @@ export class Repository {
             )))::numeric, 3)::float8
           END AS distance_km
         FROM area a
-        JOIN "facilities" f ON f.status = 'APPROVED'
+        JOIN "facilities" f ON f.status = 'APPROVED' AND f.is_demo = false
         JOIN "areas" facility_area ON facility_area.id = f.area_id
           AND facility_area.active AND facility_area.country_code = a.country_code
         JOIN "facility_services" fs ON fs.facility_id = f.id
@@ -803,7 +872,7 @@ export class Repository {
     );
   }
 
-  private async getWebLead(id: string, database: Db = this.prisma): Promise<WebLead | null> {
+  async getWebLead(id: string, database: Db = this.prisma): Promise<WebLead | null> {
     const lead = await database.webLead.findFirst({
       where: { id, status: { in: ['UNVERIFIED', 'REVIEW_CANDIDATE'] } },
       include: { source: { select: { trust_tier: true } } },
@@ -832,8 +901,7 @@ export class Repository {
     const url = clean(lead.source_url, 2048);
     const snippet = clean((lead as unknown as { snippet?: unknown }).snippet, 1000);
     const title = clean((lead as unknown as { title?: unknown }).title, 300);
-    let phone = clean(lead.phone, 40);
-    if (phone && !/^\+[1-9][0-9]{7,14}$/.test(phone)) phone = null;
+    const phone = normalizePhoneNumber(clean(lead.phone, 40));
     if (!name || !address || !url || !/^https?:\/\//.test(url)) return null;
     const provided = clean(
       (lead as unknown as { content_fingerprint?: unknown }).content_fingerprint,
@@ -896,6 +964,52 @@ export class Repository {
       ids.push(saved.id);
     }
     return ids;
+  }
+
+  async recordEmergencyRequest(
+    request: {
+      channel: 'SMS' | 'USSD';
+      area_id: string | null;
+      location_text: string;
+      results: WebLead[];
+      request_id?: string;
+    },
+    database: Db = this.prisma,
+  ): Promise<void> {
+    const results = (Array.isArray(request.results) ? request.results : [])
+      .slice(0, 8)
+      .map((lead) => ({
+        name: typeof lead.name === 'string' ? lead.name.slice(0, 200) : '',
+        address: typeof lead.address === 'string' ? lead.address.slice(0, 500) : '',
+        phone: normalizePhoneNumber(lead.phone),
+        source_url: typeof lead.source_url === 'string' ? lead.source_url.slice(0, 2048) : '',
+        source_reference:
+          typeof lead.source_reference === 'string' ? lead.source_reference.slice(0, 300) : '',
+        verification_status: 'unverified' as const,
+        service_label:
+          typeof lead.service_label === 'string' ? lead.service_label.slice(0, 80) : '',
+      }))
+      .filter((lead) => lead.name && lead.source_url);
+    let areaId: string | null = null;
+    if (request.area_id) {
+      const area = await database.area.findFirst({
+        where: { id: request.area_id, active: true },
+        select: { id: true },
+      });
+      areaId = area?.id ?? null;
+    }
+    const location = typeof request.location_text === 'string' ? request.location_text.trim() : '';
+    await database.emergencyRequest.create({
+      data: {
+        channel: request.channel,
+        kind: 'emergency',
+        area_id: areaId,
+        location_text: location ? location.slice(0, 300) : null,
+        status: results.length ? 'MATCHED' : 'NO_MATCH',
+        results: results as unknown as Prisma.InputJsonValue,
+        request_id: request.request_id ?? '',
+      },
+    });
   }
 
   private async recordReferral(
@@ -1112,6 +1226,304 @@ export class Repository {
     };
   }
 
+  /** Conversation memory is message text, so it is stored encrypted, never as plain JSON. */
+  private openHistory(context: SmsContext): SmsContext {
+    const { historyEnvelope, history: _plain, ...rest } = context ?? {};
+    if (!historyEnvelope) return rest;
+    try {
+      const history = this.crypto.decrypt<SmsContext['history']>(historyEnvelope, 'sms-history');
+      return Array.isArray(history) ? { ...rest, history } : rest;
+    } catch {
+      return rest;
+    }
+  }
+
+  private sealHistory(context: SmsContext): SmsContext {
+    const { history, historyEnvelope: _old, ...rest } = context ?? {};
+    if (!history?.length) return rest;
+    return { ...rest, historyEnvelope: this.crypto.encrypt(history, 'sms-history') };
+  }
+
+  private async livePatientForGrant(database: Db, grantDigest: string) {
+    const grants = await database.accessGrant.findMany({
+      where: { code_digest: grantDigest, revoked_at: null, expires_at: { gt: new Date() } },
+      select: { patient_id: true },
+      take: 2,
+    });
+    return grants.length === 1 ? grants[0]! : null;
+  }
+
+  /** The patient whose verified phone is sending: a live channel link, or a verified account phone. */
+  private async linkedPatient(
+    actor: Actor,
+    database: Db,
+  ): Promise<{ patientId: string; accountId: string } | null> {
+    if (!validDigest(actor.phone_digest)) return null;
+    const now = new Date();
+    const link = await database.channelLink.findFirst({
+      where: {
+        phone_digest: actor.phone_digest,
+        revoked_at: null,
+        OR: [{ expires_at: null }, { expires_at: { gt: now } }],
+        patient: { account: { status: 'ACTIVE' } },
+      },
+      orderBy: { verified_at: 'desc' },
+      select: { patient_id: true, patient: { select: { account_id: true } } },
+    });
+    if (link) return { patientId: link.patient_id, accountId: link.patient.account_id };
+    const accounts = await database.account.findMany({
+      where: {
+        phone_digest: actor.phone_digest,
+        phone_verified_at: { not: null },
+        status: 'ACTIVE',
+        patient_profile: { isNot: null },
+      },
+      select: { id: true, patient_profile: { select: { id: true } } },
+      take: 2,
+    });
+    // A number verified on two accounts is ambiguous, so it identifies nobody.
+    if (accounts.length !== 1 || !accounts[0]!.patient_profile) return null;
+    return { patientId: accounts[0]!.patient_profile.id, accountId: accounts[0]!.id };
+  }
+
+  /**
+   * The phone's language: an explicit SMS/USSD choice, else the linked patient's
+   * profile language, else English. "en" is the column default, so an explicit English
+   * choice is stored as EXPLICIT_ENGLISH.
+   */
+  async getLocale(actor: Actor, database: Db = this.prisma): Promise<Locale> {
+    if (!validDigest(actor.phone_digest)) return 'en';
+    const preference = await database.channelPreference.findUnique({
+      where: { phone_digest: actor.phone_digest },
+      select: { locale: true },
+    });
+    if (preference?.locale && preference.locale !== 'en') return toLocale(preference.locale) ?? 'en';
+    const owner = await this.linkedPatient(actor, database);
+    if (!owner) return 'en';
+    const profile = await database.patientProfile.findUnique({
+      where: { id: owner.patientId },
+      select: { preferred_language: true },
+    });
+    return toLocale(profile?.preferred_language) ?? 'en';
+  }
+
+  async setLocale(actor: Actor, locale: Locale, database: Db = this.prisma): Promise<void> {
+    if (!validDigest(actor.phone_digest)) return;
+    const stored = locale === 'en' ? EXPLICIT_ENGLISH : locale;
+    await database.channelPreference.upsert({
+      where: { phone_digest: actor.phone_digest },
+      create: { phone_digest: actor.phone_digest, locale: stored },
+      update: { locale: stored },
+    });
+  }
+
+  /** The caller's own emergency code (created if missing). Only for a verified, linked phone. */
+  async readOwnCodes(
+    actor: Actor,
+    database: Db = this.prisma,
+  ): Promise<OwnCodes> {
+    const owner = await this.linkedPatient(actor, database);
+    const channel = actor.session_id ? 'USSD' : 'SMS';
+    if (!owner) {
+      await this.audit(database, {
+        requestId: actor.request_id,
+        patientId: null,
+        channel,
+        action: 'own_code_read',
+        resourceType: 'patient_code',
+        resourceId: null,
+        outcome: 'DENIED',
+        reason: 'phone_not_linked',
+        fieldKeys: [],
+        actorRef: actor.phone_digest,
+      });
+      return { linked: false };
+    }
+    let record = await database.patientCode.findUnique({ where: { patient_id: owner.patientId } });
+    for (let attempt = 0; !record && attempt < 5; attempt += 1) {
+      const code = randomInt(0, 10 ** 12).toString().padStart(12, '0');
+      const digest = this.crypto.digestCode(code, 'patient');
+      if (!digest) continue;
+      try {
+        record = await database.patientCode.create({
+          data: {
+            patient_id: owner.patientId,
+            code_digest: digest,
+            code_ciphertext: this.crypto.encrypt(code, 'patient-code'),
+            key_version: this.config.encryptionKeyVersion,
+          },
+        });
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error;
+        record = await database.patientCode.findUnique({ where: { patient_id: owner.patientId } });
+      }
+    }
+    if (!record) throw new Error('Could not allocate a patient code');
+    await this.audit(database, {
+      requestId: actor.request_id,
+      patientId: owner.patientId,
+      channel,
+      action: 'own_code_read',
+      resourceType: 'patient_code',
+      resourceId: owner.patientId,
+      outcome: 'ALLOWED',
+      fieldKeys: [],
+      actorRef: actor.phone_digest,
+    });
+    const summaryFields = await database.emergencyField.count({
+      where: { patient_id: owner.patientId, field: { active: true } },
+    });
+    return {
+      linked: true,
+      patientCode: this.crypto.decrypt<string>(record.code_ciphertext, 'patient-code'),
+      summaryFields,
+    };
+  }
+
+  /**
+   * One-tap share from a linked phone: a temporary code for the emergency summary
+   * (or every filled emergency-eligible field) that works on USSD and the web.
+   */
+  async createQuickGrant(
+    actor: Actor,
+    minutes = 60,
+    database: Db = this.prisma,
+  ): Promise<
+    | { status: 'not_linked' }
+    | { status: 'nothing_to_share' }
+    | { status: 'created'; code: string; expiresAt: Date }
+  > {
+    const owner = await this.linkedPatient(actor, database);
+    if (!owner) return { status: 'not_linked' };
+    const selected = await database.emergencyField.findMany({
+      where: { patient_id: owner.patientId, field: { active: true } },
+      orderBy: { display_order: 'asc' },
+      select: { field_key: true },
+    });
+    const fieldKeys = selected.length
+      ? selected.map((row) => row.field_key)
+      : (
+          await database.patientFieldValue.findMany({
+            where: { patient_id: owner.patientId, field: { active: true, emergency_eligible: true } },
+            select: { field_key: true },
+          })
+        ).map((row) => row.field_key);
+    if (!fieldKeys.length) return { status: 'nothing_to_share' };
+    const expiresAt = new Date(Date.now() + Math.min(Math.max(minutes, 5), 24 * 60) * 60_000);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const code = randomInt(0, 10 ** 8).toString().padStart(8, '0');
+      const digest = this.crypto.digestCode(code, 'grant');
+      if (!digest || (await this.livePatientForGrant(database, digest))) continue;
+      try {
+        const grant = await database.accessGrant.create({
+          data: {
+            patient_id: owner.patientId,
+            code_digest: digest,
+            expires_at: expiresAt,
+            created_by_account_id: owner.accountId,
+            fields: { create: fieldKeys.map((field_key) => ({ field_key })) },
+            channels: { create: [{ channel: 'WEB_PRACTITIONER' }, { channel: 'USSD' }] },
+          },
+        });
+        await this.audit(database, {
+          requestId: actor.request_id,
+          patientId: owner.patientId,
+          channel: actor.session_id ? 'USSD' : 'SMS',
+          action: 'grant_create',
+          resourceType: 'access_grant',
+          resourceId: grant.id,
+          outcome: 'ALLOWED',
+          fieldKeys,
+          actorRef: actor.phone_digest,
+        });
+        return { status: 'created', code, expiresAt };
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error;
+      }
+    }
+    throw new Error('Could not allocate an access code');
+  }
+
+  private async liveConsentForPhone(actor: Actor, database: Db) {
+    if (!validDigest(actor.phone_digest)) return null;
+    const now = new Date();
+    return database.profileUseConsent.findFirst({
+      where: {
+        revoked_at: null,
+        expires_at: { gt: now },
+        phone_link: {
+          phone_digest: actor.phone_digest,
+          revoked_at: null,
+          OR: [{ expires_at: null }, { expires_at: { gt: now } }],
+        },
+      },
+      select: { id: true, patient_id: true, channel: true },
+      orderBy: { expires_at: 'desc' },
+    });
+  }
+
+  /** The linked patient's home area, offered as a default in care and emergency search. */
+  async findSavedArea(actor: Actor, database: Db = this.prisma): Promise<SavedArea | null> {
+    // The patient's own verified phone may see their own home area; a consent also allows it.
+    const consent = await this.liveConsentForPhone(actor, database);
+    const owner = consent
+      ? { patientId: consent.patient_id, channel: consent.channel }
+      : await this.linkedPatient(actor, database).then((linked) =>
+          linked
+            ? { patientId: linked.patientId, channel: (actor.session_id ? 'USSD' : 'SMS') as 'USSD' | 'SMS' }
+            : null,
+        );
+    if (!owner) return null;
+    const profile = await database.patientProfile.findUnique({
+      where: { id: owner.patientId },
+      select: {
+        home_area: {
+          select: { id: true, name: true, city: true, region: true, active: true, is_demo: true },
+        },
+      },
+    });
+    const area = profile?.home_area;
+    if (!area || !area.active || area.is_demo) return null;
+    const suffix = area.city && area.city !== area.name ? area.city : area.region;
+    await this.audit(database, {
+      requestId: actor.request_id,
+      patientId: owner.patientId,
+      channel: owner.channel,
+      action: 'profile_area_read',
+      resourceType: 'area',
+      resourceId: area.id,
+      outcome: 'ALLOWED',
+      fieldKeys: [],
+      actorRef: actor.phone_digest,
+    });
+    return { id: area.id, label: suffix ? `${area.name}, ${suffix}` : area.name };
+  }
+
+  /** Consent-scoped, de-identified hints that tailor general health answers. */
+  async readPersonalHints(actor: Actor, database: Db = this.prisma): Promise<PersonalHints | null> {
+    const consent = await this.liveConsentForPhone(actor, database);
+    if (!consent) return null;
+    const [fields, profile] = await Promise.all([
+      this.consentProjection(database, consent.id, consent.patient_id),
+      database.patientProfile.findUnique({
+        where: { id: consent.patient_id },
+        select: { preferred_language: true },
+      }),
+    ]);
+    const hints = personalHintsFrom(fields, profile?.preferred_language ?? 'en');
+    await this.auditRead(database, {
+      channel: consent.channel,
+      action: 'assistant_context_read',
+      patientId: consent.patient_id,
+      outcome: 'ALLOWED',
+      reason: null,
+      fields,
+      requestId: actor.request_id,
+      actorRef: actor.phone_digest,
+    });
+    return hints;
+  }
+
   private async readProfileContext(
     consentId: string,
     actor: Actor,
@@ -1320,7 +1732,7 @@ export class Repository {
     values: {
       channel: 'SMS' | 'USSD';
       action: string;
-      targetDigest: string;
+      targetDigest: string | null;
       phoneDigest: string;
       limit: number;
       windowSeconds: number;
@@ -1541,7 +1953,7 @@ export class Repository {
   }
 
   private async openGrantedRecord(
-    patientDigest: string,
+    patientDigest: string | null,
     grantDigest: string,
     actor: Actor,
     database: Db = this.prisma,
@@ -1575,7 +1987,7 @@ export class Repository {
       });
       return deniedProjection();
     }
-    if (!validDigest(patientDigest) || !validDigest(grantDigest)) {
+    if ((patientDigest !== null && !validDigest(patientDigest)) || !validDigest(grantDigest)) {
       await this.attempt(database, {
         channel: 'USSD',
         action: 'grant_open',
@@ -1597,14 +2009,24 @@ export class Repository {
       return deniedProjection();
     }
     if (
-      await this.tooManyAttempts(database, {
+      (await this.tooManyAttempts(database, {
         channel: 'USSD',
         action: 'grant_open',
         targetDigest: grantDigest,
         phoneDigest: phone,
         limit: 5,
         windowSeconds: 900,
-      })
+      })) ||
+      // A temporary code now opens a record on its own, so also cap failures per
+      // phone across every code; otherwise guessing a new code each time is unlimited.
+      (await this.tooManyAttempts(database, {
+        channel: 'USSD',
+        action: 'grant_open',
+        targetDigest: null,
+        phoneDigest: phone,
+        limit: 8,
+        windowSeconds: 900,
+      }))
     ) {
       await this.attempt(database, {
         channel: 'USSD',
@@ -1626,10 +2048,13 @@ export class Repository {
       });
       return deniedProjection();
     }
-    const code = await database.patientCode.findUnique({
-      where: { code_digest: patientDigest },
-      select: { patient_id: true },
-    });
+    // One-code access: a temporary access code alone identifies its patient.
+    const code = patientDigest
+      ? await database.patientCode.findUnique({
+          where: { code_digest: patientDigest },
+          select: { patient_id: true },
+        })
+      : await this.livePatientForGrant(database, grantDigest);
     if (!code) {
       await this.attempt(database, {
         channel: 'USSD',

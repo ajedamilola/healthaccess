@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateFiles } from "@/features/assistant/NewConversation";
+import { validateFiles } from "@/features/assistant/files";
 
 function file(name: string, type: string, size = 1024) {
   return new File([new Uint8Array(size)], name, { type });

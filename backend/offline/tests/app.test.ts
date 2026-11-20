@@ -14,14 +14,17 @@ async function serve(
 ) {
   const calls: InboundSms[] = [];
   const events: UssdEvent[] = [];
+  const logs: Array<Record<string, unknown>> = [];
   const config = {
     allowedCidrs: [],
     callbackAuthMode: 'development_open' as const,
     callbackPathKey: 'test-path',
     callbackRatePerMinute: 120,
+    callbackPhoneRatePerMinute: 60,
     callbackBodyLimitBytes: 8192,
     atSmsInboundNumbers: ['1234'],
     atUssdServiceCode: '*test#',
+    httpLogBodies: 'full' as const,
     ...configOverrides,
   };
   const app = createApp({
@@ -40,7 +43,16 @@ async function serve(
       },
       ...overrides,
     },
-    logger: { error() {} },
+    logger: {
+      error() {},
+      info(entry: unknown) {
+        if (typeof entry === 'string') {
+          logs.push(JSON.parse(entry) as Record<string, unknown>);
+        } else if (entry && typeof entry === 'object') {
+          logs.push(entry as Record<string, unknown>);
+        }
+      },
+    },
   });
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -58,7 +70,7 @@ async function serve(
       },
       body: new URLSearchParams(body),
     });
-  return { post, url, calls, events };
+  return { post, url, calls, events, logs };
 }
 
 test('development callbacks accept provider posts and reject malformed form fields', async (t) => {
@@ -117,6 +129,56 @@ test('SMS durable acceptance failure is not acknowledged; USSD safely terminates
   assert.equal((await fetch(`${url}/health/live`)).status, 200);
 });
 
+test('logs every HTTP request with method, safe URL and configured body mode', async (t) => {
+  const full = await serve(t);
+  await full.post('/sms/inbound', {
+    id: 'AT-LOG-1',
+    from: '+2348000000000',
+    to: '1234',
+    text: 'HELP',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const fullEntry = full.logs.find((entry) => entry.event === 'http_request');
+  assert.ok(fullEntry);
+  assert.equal(fullEntry.method, 'POST');
+  assert.match(
+    String(fullEntry.url),
+    /^\/callbacks\/africastalking\/\[token\]\/sms\/inbound$/,
+  );
+  assert.equal(String(fullEntry.url).includes('test-path'), false);
+  assert.equal(fullEntry.status, 200);
+  const fullBody = fullEntry.body as Record<string, string>;
+  assert.equal(fullBody.from, '+2348000000000');
+  assert.equal(fullBody.text, 'HELP');
+
+  const redacted = await serve(t, {}, { httpLogBodies: 'redacted' });
+  await redacted.post('/sms/inbound', {
+    id: 'AT-LOG-2',
+    from: '+2348000000000',
+    to: '1234',
+    text: 'I have a fever',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const entry = redacted.logs.find((item) => item.event === 'http_request');
+  assert.ok(entry);
+  const body = entry.body as Record<string, string>;
+  assert.equal(body.from, '***0000');
+  assert.equal(body.to, '***1234');
+  assert.equal(body.text, '[redacted 14 chars]');
+
+  const off = await serve(t, {}, { httpLogBodies: 'off' });
+  await off.post('/sms/inbound', {
+    id: 'AT-LOG-3',
+    from: '+2348000000000',
+    to: '1234',
+    text: 'HELP',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const offEntry = off.logs.find((item) => item.event === 'http_request');
+  assert.ok(offEntry);
+  assert.equal('body' in offEntry, false);
+});
+
 test('CIDR matching handles IPv4-mapped addresses and strict ranges', () => {
   const match = createIpMatcher(['10.2.0.0/16', '2001:db8::/32']);
   assert.equal(match('::ffff:10.2.1.2'), true);
@@ -152,4 +214,19 @@ test('cumulative USSD path parser bounds tokens without retaining raw transcript
   assert.throws(() => parseUssdPath('1**3'));
   assert.throws(() => parseUssdPath('1*\n'));
   assert.throws(() => parseUssdPath(Array(52).fill('1').join('*')));
+});
+
+test('callbacks are rate limited per sender phone, not only per provider IP', async (t) => {
+  const scopes: string[] = [];
+  const { post } = await serve(t, {
+    takeRateLimit: async (scope: string) => {
+      scopes.push(scope);
+      return !scope.startsWith('callback-phone:2348011111111');
+    },
+  });
+  const sms = (from: string) => post('/sms/inbound', { id: `m-${from}`, from, to: '1234', text: 'hi' });
+  assert.equal((await sms('+2348011111111')).status, 429);
+  assert.equal((await sms('+2348022222222')).status, 200);
+  assert.ok(scopes.some((scope) => scope.startsWith('callback-ip:')));
+  assert.ok(scopes.includes('callback-phone:2348022222222'));
 });

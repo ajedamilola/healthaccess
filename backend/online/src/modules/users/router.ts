@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
+import { buildPatientSnapshot, languageName, snapshotCompleteness } from '../../ai/context.js';
+import { prisma } from '../../db.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { AppError } from '../../middleware/error.js';
 import {
@@ -27,6 +29,21 @@ const uuidSchema = z.string().uuid();
 
 meRouter.get('/', requireAuth, async (req, res) => {
   res.json(await loadMe(req.auth!.accountId));
+});
+
+// What the assistant will know about the patient when they share their record,
+// and which missing details would make answers more accurate.
+meRouter.get('/assistant-context', requireAuth, async (req, res) => {
+  const profile = await prisma.patientProfile.findUnique({
+    where: { account_id: req.auth!.accountId },
+    select: { id: true },
+  });
+  const snapshot = profile ? await buildPatientSnapshot(profile.id) : null;
+  res.json({
+    snapshot,
+    language: languageName(snapshot?.preferredLanguage),
+    completeness: snapshotCompleteness(snapshot),
+  });
 });
 
 meRouter.patch('/', requireAuth, async (req, res) => {

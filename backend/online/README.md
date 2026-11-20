@@ -4,9 +4,10 @@
 patient portal. It owns the PostgreSQL schema and serves the versioned HTTP API
 used by the web client and the symptom/medication features.
 
-Status: auth/users, portal/grants, directory, symptom chat, medications/reminders,
-the AI layer, reminder job and FCM service are implemented. Workspace typecheck is
-clean and the online DB suite passes 78 tests. Live FCM delivery and production
+Status: auth/users, portal/grants, directory, live Serper directory and emergency
+search, symptom chat (including SSE streaming), medications/reminders, the AI
+layer, reminder job and FCM service are implemented. Workspace typecheck is clean
+and the online DB suite passes 108 tests. Live FCM delivery and production
 provider credentials are not configured. See `../../docs/README.md` for the phase
 table.
 
@@ -14,7 +15,7 @@ table.
 
 - Node 24+ and npm 11+
 - PostgreSQL 16 (the repository `docker-compose.yml` provides one)
-- Optional: Redis 7, S3-compatible storage (MinIO), Firebase project, AI provider
+- Optional: Redis 7 (included in compose), S3-compatible storage (MinIO), Firebase project, AI provider
   keys, Africa's Talking credentials
 - Editor: the Prisma VS Code extension defaults to its Prisma 7 language server.
   This project pins Prisma 6.19.3, so `.vscode/settings.json` sets
@@ -43,15 +44,17 @@ Then create/apply the schema and reference seed:
 
 ```sh
 npm run db:migrate      # prisma migrate dev; creates a migration and applies it
-npm run db:seed         # field definitions, services and demo fixtures
+npm run db:seed         # field definitions, services and the sandbox patient
 ```
 
-The seed is idempotent. It creates 15 field definitions, 3 services, the Ikeja
-demo area, two approved `is_demo` facilities, and demo patient
+The seed is idempotent. It creates 15 field definitions, 3 services, the real
+`Ikeja, Lagos` area (`is_demo = false`) and the sandbox patient
 `demo.patient@example.test` / `DemoPass123!` with patient code `123456789012`.
+It creates no demo facilities and removes legacy demo facility rows. Care
+results come from approved non-demo facilities and live Serper Maps leads.
 It requires `CODE_DIGEST_KEY` and `DATA_ENCRYPTION_KEY` for the code digest and
-envelope. Those credentials are fixtures only; never use them outside a demo
-database.
+envelope. The sandbox credentials are fixtures only; never use them outside a
+demo database.
 
 `db:migrate` is for development. Use `npm run db:deploy` or
 `npx prisma migrate deploy` for a shared/production database. Never edit an
@@ -95,6 +98,11 @@ inside another workspace without the root workspace context.
 | `GOOGLE_CLIENT_SECRET`       | no          | Google OAuth.                                                     |
 | `BASE_URL`                   | no          | Public API origin, default `http://localhost:3000`.               |
 | `FRONTEND_URL`               | no          | CORS origin, default `http://localhost:5173`.                     |
+| `SMTP_HOST`                  | for email   | SMTP server hostname; enables password-reset email.               |
+| `SMTP_PORT`                  | no          | SMTP port, default `587`; port `465` uses TLS.                     |
+| `SMTP_USER`                  | no          | SMTP username; set together with `SMTP_PASSWORD`.                 |
+| `SMTP_PASSWORD`              | no          | SMTP password; set together with `SMTP_USER`.                     |
+| `EMAIL_FROM`                 | for email   | Sender address configured for the SMTP account.                   |
 | `AWS_REGION`                 | for uploads | S3 region.                                                        |
 | `AWS_ACCESS_KEY_ID`          | for uploads | S3 access key.                                                    |
 | `AWS_SECRET_ACCESS_KEY`      | for uploads | S3 secret.                                                        |
@@ -124,6 +132,11 @@ inside another workspace without the root workspace context.
 Never commit `.env`. Do not log request bodies, clinical values, codes, phone
 numbers or tokens; the app logs method, path, status, duration and request id.
 
+Password recovery uses `POST /v1/auth/forgot-password` and
+`POST /v1/auth/reset-password`. Configure SMTP to enable delivery. Reset links
+expire after 30 minutes, are single-use, and revoke the account's existing
+sessions when used. Unknown account emails receive the same accepted response.
+
 ## Endpoint groups
 
 All routes mount under `/v1`. `src/routes.ts` is the wiring point; modules export
@@ -134,9 +147,10 @@ a named router and must not import each other.
 | Auth           | `/v1/auth`      | register, login, refresh, logout, Google OAuth, phone begin/confirm     |
 | Me / users     | `/v1/me`        | profile, medical profile, avatar, allergies, medical events             |
 | Portal         | `/v1/me`        | fields, emergency fields/summary, patient code, grants, consents, events |
-| Directory      | `/v1/directory` | services, areas, facilities, facility detail                            |
+| Directory      | `/v1/directory` | services, areas, live+approved facilities, facility/web-lead detail     |
+| Emergency      | `/v1/emergency` | request live emergency search/history, account-scoped                   |
 | Records        | `/v1/records`   | emergency read, grant open/read/close                                   |
-| Symptom        | `/v1/symptom`   | create/list/get, follow-up, update, delete                              |
+| Symptom        | `/v1/symptom`   | create/list/get, SSE stream, follow-up (+stream), update, delete         |
 | Medications    | `/v1/medications` | create/list/get, delete, add/remove medications, moment status        |
 | Devices        | `/v1/devices`   | register notification token                                             |
 
@@ -146,9 +160,12 @@ root with `npm run docs:api`. When the API is running it is also served at
 `http://localhost:3000/docs`, which makes the Try It panel same-origin.
 
 The intended full surface is listed in `../../docs/integration-plan.md`. All
-groups above have handlers; `/v1/symptom` includes multipart attachment upload and
-follow-ups. Test the route and its ownership/authorization behavior before
-treating a change as complete.
+groups above have handlers; `/v1/symptom` includes multipart attachment upload,
+follow-ups and server-sent event streams (`POST /symptom/stream` and
+`POST /symptom/:id/follow-up/stream`). Stream events are `record`, `step`,
+`token`, `done` and `error`. `/v1/directory` merges approved non-demo facilities
+with live Serper leads unless `include_live=false`. Test the route and its
+ownership/authorization behavior before treating a change as complete.
 
 Health endpoints are outside `/v1`:
 
@@ -185,10 +202,13 @@ The intended behavior is:
 - Patient code, grant code, phone number and `phone_digest` are never placed in
   prompts.
 - With no provider key, the AI endpoint returns 503.
+- Streaming uses LangGraph `streamEvents` v2 and emits tool steps plus model
+  tokens; a client disconnect aborts the model call.
 
 Provider selection uses `DEEPSEEK_API_KEY`, `GOOGLE_API_KEY`,
-`ANTHROPIC_API_KEY` or `GROQ_API_KEY`; `SERPER_API_KEY` enables web search where
-used. De-identified clinical context is still sent to a third-party model
+`ANTHROPIC_API_KEY` or `GROQ_API_KEY`; `SERPER_API_KEY` enables live directory,
+emergency and web search. Live directory/emergency results are unverified and
+must be labelled as such. De-identified clinical context is still sent to a third-party model
 provider, whose retention/training terms apply. Do not enable this for real
 patients before the provider and data-protection review is approved. See
 `../../docs/architecture.md`.
@@ -229,6 +249,7 @@ node --env-file-if-exists=.env --test --import tsx tests/*.test.ts
 
 `npm test` in this workspace runs every `tests/*.test.ts`, which currently means
 the PostgreSQL integration suites (`schema`, auth, users, portal, directory,
-symptom, medications, reminders). The suite currently passes 78 tests. CI
-excludes it and provisions no database. There is no online unit suite yet.
+emergency, symptom, medications, reminders). The suite currently passes 108
+tests. CI excludes it and provisions no database. There is no separate online
+unit suite.
 Never point tests at a shared or production database.

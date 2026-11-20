@@ -149,7 +149,7 @@ export function CreateGrantForm({ fields, fieldsLoading, fieldsError, onRetryFie
       <div className={styles.panelHead}>
         <div className={styles.panelIntro}>
           <h2 id="create-grant-title" className={styles.panelTitle}>
-            Create an access code
+            Choose exactly what to share
           </h2>
           <p className={styles.panelCopy}>
             Choose exactly what another person can read, how they reach it, and how long it lasts.
@@ -267,7 +267,7 @@ export function CreateGrantForm({ fields, fieldsLoading, fieldsError, onRetryFie
                 onCheckedChange={(next) => toggleChannel("WEB_PRACTITIONER", next)}
               />
               <Checkbox
-                label="USSD with both codes"
+                label="USSD"
                 description="The practitioner enters both codes from any phone."
                 checked={channels.includes("USSD")}
                 onCheckedChange={(next) => toggleChannel("USSD", next)}

@@ -44,6 +44,7 @@ const requiredTables = [
   'web_leads',
   'referral_requests',
   'referral_results',
+  'emergency_requests',
   'reviewed_health_content',
   'reviewed_content_citations',
   'web_observations',

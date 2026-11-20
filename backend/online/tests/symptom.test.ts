@@ -7,7 +7,12 @@ import sharp from 'sharp';
 import request from 'supertest';
 import type { AgentMessageInput, ConversationEntry } from '../src/ai/agents.js';
 import { errorHandler, notFound } from '../src/middleware/error.js';
-import type { SymptomAi, SymptomAiContext } from '../src/modules/symptom/ai.js';
+import type {
+  SymptomAi,
+  SymptomAiContext,
+  SymptomAiStreamEvent,
+  SymptomAiStreamOptions,
+} from '../src/modules/symptom/ai.js';
 import type { AttachmentStorage } from '../src/modules/symptom/attachments.js';
 import {
   createSymptomRouter,
@@ -23,6 +28,7 @@ import type {
 class MemorySymptomStore implements SymptomStore {
   records = new Map<string, SymptomRecord>();
   patients = new Map<string, string>();
+  languages = new Map<string, string>();
 
   addPatient(accountId: string, patientId = randomUUID()) {
     this.patients.set(accountId, patientId);
@@ -41,6 +47,7 @@ class MemorySymptomStore implements SymptomStore {
       summary: null,
       include_records: true,
       modify_history: true,
+      language: 'en',
       files: [],
       thread_id: `symptom_${id}`,
       model_version: 'test-model',
@@ -54,6 +61,10 @@ class MemorySymptomStore implements SymptomStore {
 
   async findPatientId(accountId: string) {
     return this.patients.get(accountId) ?? null;
+  }
+
+  async findPreferredLanguage(accountId: string) {
+    return this.languages.get(accountId) ?? null;
   }
 
   async create(input: CreateSymptomRecordInput) {
@@ -106,23 +117,64 @@ class MemorySymptomStore implements SymptomStore {
 
 interface FakeAi extends SymptomAi {
   invocations: Array<{ context: SymptomAiContext; input: AgentMessageInput }>;
+  streamCalls: Array<{
+    context: SymptomAiContext;
+    input: AgentMessageInput;
+    options?: SymptomAiStreamOptions;
+  }>;
   cleared: string[];
 }
+
+type StreamFactory = (
+  context: SymptomAiContext,
+  input: AgentMessageInput,
+  options?: SymptomAiStreamOptions,
+) => AsyncIterable<SymptomAiStreamEvent>;
 
 function fakeAi(options: {
   configured?: boolean;
   history?: ConversationEntry[];
   response?: ConversationEntry[];
+  stream?: StreamFactory;
 } = {}): FakeAi {
   const invocations: FakeAi['invocations'] = [];
+  const streamCalls: FakeAi['streamCalls'] = [];
   const cleared: string[] = [];
   return {
     invocations,
+    streamCalls,
     cleared,
     isConfigured: () => options.configured ?? true,
     async invoke(context, input) {
       invocations.push({ context, input });
       return options.response ?? [{ type: 'AI', content: 'Assessment ready' }];
+    },
+    async *stream(context, input, streamOptions) {
+      streamCalls.push({ context, input, options: streamOptions });
+      if (options.stream) {
+        yield* options.stream(context, input, streamOptions);
+        return;
+      }
+      yield {
+        type: 'step',
+        id: 'tool-1',
+        name: 'record_symptom',
+        status: 'started',
+        input: { severity: 'MILD' },
+      };
+      yield {
+        type: 'step',
+        id: 'tool-1',
+        name: 'record_symptom',
+        status: 'completed',
+        output: { saved: true },
+      };
+      yield { type: 'token', content: 'Assessment ' };
+      yield { type: 'token', content: 'ready' };
+      yield {
+        type: 'done',
+        messages: options.response ?? [{ type: 'AI', content: 'Assessment ready' }],
+      };
     },
     async history() {
       return options.history ?? [];
@@ -131,6 +183,32 @@ function fakeAi(options: {
       cleared.push(threadId);
     },
   };
+}
+
+interface SseEvent {
+  event: string;
+  data: unknown;
+}
+
+function parseSse(text: string): SseEvent[] {
+  const events: SseEvent[] = [];
+  for (const block of text.split('\n\n')) {
+    let event = 'message';
+    const dataLines: string[] = [];
+    for (const line of block.split('\n')) {
+      if (line.startsWith(':')) continue;
+      if (line.startsWith('event: ')) {
+        event = line.slice('event: '.length).trim();
+        continue;
+      }
+      if (line.startsWith('data: ')) {
+        dataLines.push(line.slice('data: '.length));
+      }
+    }
+    if (!dataLines.length) continue;
+    events.push({ event, data: JSON.parse(dataLines.join('\n')) });
+  }
+  return events;
 }
 
 function mockStorage() {
@@ -198,6 +276,29 @@ test('POST /v1/symptom returns 503 and creates no record when AI is unconfigured
   assert.equal(response.status, 503);
   assert.equal(response.body.error, 'ai_unavailable');
   assert.equal(store.records.size, 0);
+});
+
+test('POST /v1/symptom stores the conversation language and falls back to the profile', async () => {
+  const store = new MemorySymptomStore();
+  store.addPatient('acct-a');
+  store.languages.set('acct-a', 'yo');
+  const ai = fakeAi();
+  const app = buildApp({ store, ai, storage: mockStorage().storage });
+
+  const chosen = await request(app)
+    .post('/v1/symptom')
+    .field('message', 'I have a headache')
+    .field('language', 'IG-NG');
+
+  assert.equal(chosen.status, 201);
+  assert.equal(chosen.body.symptom.language, 'ig');
+  assert.equal(ai.invocations[0]?.context.language, 'ig');
+
+  const fallback = await request(app).post('/v1/symptom').field('message', 'I have a cough');
+
+  assert.equal(fallback.status, 201);
+  assert.equal(fallback.body.symptom.language, 'yo');
+  assert.equal(ai.invocations[1]?.context.language, 'yo');
 });
 
 test('POST /v1/symptom stores normalized image keys and thread id', async () => {
@@ -434,4 +535,270 @@ test('DELETE /v1/symptom/:id clears checkpoints, files and the record', async ()
   assert.deepEqual(deleted.sort(), ['symptom/a/one.webp', 'symptom/a/two.pdf']);
   assert.deepEqual(ai.cleared, [`symptom_${record.id}`]);
   assert.equal(store.records.size, 0);
+});
+
+test('POST /v1/symptom/stream emits record, step, token and done events in order', async () => {
+  const store = new MemorySymptomStore();
+  const patientId = store.addPatient('acct-a');
+  const ai = fakeAi();
+  const { storage } = mockStorage();
+  const app = buildApp({ store, ai, storage });
+
+  const response = await request(app)
+    .post('/v1/symptom/stream')
+    .field('message', 'I have a headache')
+    .field('includeRecords', 'false')
+    .field('modifyHistory', 'false');
+
+  assert.equal(response.status, 200);
+  assert.match(response.headers['content-type'], /^text\/event-stream/);
+  assert.equal(response.headers['cache-control'], 'no-cache, no-transform');
+  assert.equal(response.headers['x-accel-buffering'], 'no');
+
+  const events = parseSse(response.text);
+  assert.deepEqual(
+    events.map((event) => event.event),
+    ['record', 'step', 'step', 'token', 'token', 'done'],
+  );
+
+  assert.equal(store.records.size, 1);
+  const stored = [...store.records.values()][0];
+  const record = events[0].data as { symptom: SymptomRecord };
+  assert.equal(record.symptom.id, stored.id);
+  assert.equal(record.symptom.thread_id, `symptom_${stored.id}`);
+  assert.equal(record.symptom.include_records, false);
+  assert.equal(record.symptom.modify_history, false);
+
+  const started = events[1].data as Record<string, unknown>;
+  assert.deepEqual(Object.keys(started).sort(), ['id', 'input', 'name', 'status']);
+  assert.equal(started.id, 'tool-1');
+  assert.equal(started.name, 'record_symptom');
+  assert.equal(started.status, 'started');
+  assert.deepEqual(started.input, { severity: 'MILD' });
+
+  const completed = events[2].data as Record<string, unknown>;
+  assert.equal(completed.status, 'completed');
+  assert.deepEqual(completed.output, { saved: true });
+
+  const tokens = events
+    .filter((event) => event.event === 'token')
+    .map((event) => (event.data as { content: string }).content)
+    .join('');
+  assert.equal(tokens, 'Assessment ready');
+
+  const done = events[5].data as { symptom: SymptomRecord; messages: ConversationEntry[] };
+  assert.equal(done.symptom.id, stored.id);
+  assert.deepEqual(done.messages, [{ type: 'AI', content: 'Assessment ready' }]);
+
+  assert.equal(ai.invocations.length, 0);
+  assert.equal(ai.streamCalls.length, 1);
+  assert.equal(ai.streamCalls[0].input.text, 'I have a headache');
+  assert.equal(ai.streamCalls[0].context.patientId, patientId);
+  assert.equal(ai.streamCalls[0].context.includeRecords, false);
+  assert.ok(ai.streamCalls[0].options?.signal instanceof AbortSignal);
+});
+
+test('POST /v1/symptom/stream keeps preflight failures as JSON before headers', async () => {
+  const store = new MemorySymptomStore();
+  store.addPatient('acct-a');
+  const unconfigured = fakeAi({ configured: false });
+  const app = buildApp({ store, ai: unconfigured, storage: mockStorage().storage });
+
+  const unavailable = await request(app)
+    .post('/v1/symptom/stream')
+    .field('message', 'I have a headache');
+
+  assert.equal(unavailable.status, 503);
+  assert.equal(unavailable.body.error, 'ai_unavailable');
+  assert.equal(unavailable.headers['content-type']?.startsWith('text/event-stream'), false);
+  assert.equal(store.records.size, 0);
+
+  const invalid = await request(app).post('/v1/symptom/stream').field('message', '   ');
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.body.error, 'validation_error');
+  assert.equal(invalid.headers['content-type']?.startsWith('text/event-stream'), false);
+  assert.equal(store.records.size, 0);
+});
+
+test('POST /v1/symptom/stream failure before any token emits error, cleans up and deletes', async () => {
+  const store = new MemorySymptomStore();
+  store.addPatient('acct-a');
+  const failing: StreamFactory = async function* () {
+    yield { type: 'step', id: 'tool-1', name: 'record_symptom', status: 'started', input: {} };
+    throw new Error('model failed');
+  };
+  const ai = fakeAi({ stream: failing });
+  const { storage, deleted } = mockStorage();
+  const app = buildApp({ store, ai, storage });
+  const png = await pngBuffer();
+
+  const response = await request(app)
+    .post('/v1/symptom/stream')
+    .field('message', 'I have a headache')
+    .attach('images', png, { filename: 'head.png', contentType: 'image/png' });
+
+  assert.equal(response.status, 200);
+  const events = parseSse(response.text);
+  assert.deepEqual(
+    events.map((event) => event.event),
+    ['record', 'step', 'error'],
+  );
+  const record = events[0].data as { symptom: SymptomRecord };
+  assert.deepEqual(events[2].data, { error: 'stream_error', message: 'model failed' });
+
+  assert.equal(store.records.size, 0);
+  assert.equal(deleted.length, 1);
+  assert.deepEqual(ai.cleared, [`symptom_${record.symptom.id}`]);
+  assert.equal(ai.invocations.length, 0);
+});
+
+test('POST /v1/symptom/stream failure after a token keeps the record', async () => {
+  const store = new MemorySymptomStore();
+  store.addPatient('acct-a');
+  const failing: StreamFactory = async function* () {
+    yield { type: 'token', content: 'Partial advice' };
+    throw new Error('upstream closed');
+  };
+  const ai = fakeAi({ stream: failing });
+  const { storage, deleted, uploads } = mockStorage();
+  const app = buildApp({ store, ai, storage });
+  const png = await pngBuffer();
+
+  const response = await request(app)
+    .post('/v1/symptom/stream')
+    .field('message', 'I have a headache')
+    .attach('images', png, { filename: 'head.png', contentType: 'image/png' });
+
+  assert.equal(response.status, 200);
+  const events = parseSse(response.text);
+  assert.deepEqual(
+    events.map((event) => event.event),
+    ['record', 'token', 'error'],
+  );
+  assert.deepEqual(events[1].data, { content: 'Partial advice' });
+  assert.deepEqual(events[2].data, { error: 'stream_error', message: 'upstream closed' });
+
+  assert.equal(store.records.size, 1);
+  const stored = [...store.records.values()][0];
+  assert.deepEqual(stored.files, []);
+  assert.deepEqual(deleted, [uploads[0].key]);
+  assert.equal(ai.cleared.length, 0);
+});
+
+test('POST /v1/symptom/:id/follow-up/stream streams and appends attachments on done', async () => {
+  const store = new MemorySymptomStore();
+  const patientId = store.addPatient('acct-a');
+  const record = store.seed('acct-a', { files: ['symptom/existing/old.webp'] });
+  const reply: ConversationEntry[] = [
+    { type: 'Human', content: 'It got worse' },
+    { type: 'AI', content: 'Seek urgent care' },
+  ];
+  const ai = fakeAi({ response: reply });
+  const { storage, uploads } = mockStorage();
+  const app = buildApp({ store, ai, storage });
+  const png = await pngBuffer();
+
+  const response = await request(app)
+    .post(`/v1/symptom/${record.id}/follow-up/stream`)
+    .field('message', 'It got worse')
+    .attach('images', png, { filename: 'worse.png', contentType: 'image/png' });
+
+  assert.equal(response.status, 200);
+  const events = parseSse(response.text);
+  assert.deepEqual(
+    events.map((event) => event.event),
+    ['record', 'step', 'step', 'token', 'token', 'done'],
+  );
+  const recordEvent = events[0].data as { symptom: SymptomRecord };
+  assert.equal(recordEvent.symptom.id, record.id);
+  assert.deepEqual(recordEvent.symptom.files, ['symptom/existing/old.webp']);
+
+  const done = events[5].data as { symptom: SymptomRecord; messages: ConversationEntry[] };
+  assert.equal(done.symptom.id, record.id);
+  assert.deepEqual(done.messages, reply);
+  assert.equal(uploads.length, 1);
+  assert.deepEqual(done.symptom.files, ['symptom/existing/old.webp', uploads[0].key]);
+  assert.deepEqual(store.records.get(record.id)?.files, done.symptom.files);
+
+  assert.equal(ai.invocations.length, 0);
+  assert.equal(ai.streamCalls.length, 1);
+  assert.equal(ai.streamCalls[0].context.patientId, patientId);
+  assert.equal(ai.streamCalls[0].context.includeRecords, true);
+  assert.equal(ai.streamCalls[0].context.modifyHistory, true);
+});
+
+test('follow-up stream failure cleans attachments but never deletes the record', async () => {
+  const store = new MemorySymptomStore();
+  store.addPatient('acct-a');
+  const record = store.seed('acct-a', { files: ['symptom/existing/old.webp'] });
+  const failing: StreamFactory = async function* () {
+    yield { type: 'token', content: 'Partial' };
+    throw new Error('model failed');
+  };
+  const ai = fakeAi({ stream: failing });
+  const { storage, deleted, uploads } = mockStorage();
+  const app = buildApp({ store, ai, storage });
+  const png = await pngBuffer();
+
+  const response = await request(app)
+    .post(`/v1/symptom/${record.id}/follow-up/stream`)
+    .field('message', 'Still there')
+    .attach('images', png, { filename: 'again.png', contentType: 'image/png' });
+
+  assert.equal(response.status, 200);
+  const events = parseSse(response.text);
+  assert.deepEqual(
+    events.map((event) => event.event),
+    ['record', 'token', 'error'],
+  );
+  assert.deepEqual(events[2].data, { error: 'stream_error', message: 'model failed' });
+
+  assert.ok(store.records.has(record.id));
+  assert.deepEqual(store.records.get(record.id)?.files, ['symptom/existing/old.webp']);
+  assert.deepEqual(deleted, [uploads[0].key]);
+});
+
+test('follow-up stream returns 404 JSON for a foreign id before any model call', async () => {
+  const store = new MemorySymptomStore();
+  store.addPatient('acct-a');
+  store.addPatient('acct-b');
+  const foreign = store.seed('acct-b');
+  const ai = fakeAi();
+  const { storage, deleted } = mockStorage();
+  const app = buildApp({ store, ai, storage, accountId: 'acct-a' });
+
+  const response = await request(app)
+    .post(`/v1/symptom/${foreign.id}/follow-up/stream`)
+    .field('message', 'Hello');
+
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error, 'not_found');
+  assert.equal(response.headers['content-type']?.startsWith('text/event-stream'), false);
+  assert.equal(ai.streamCalls.length, 0);
+  assert.equal(ai.invocations.length, 0);
+  assert.equal(deleted.length, 0);
+  assert.equal(store.records.get(foreign.id)?.name, 'Headache');
+});
+
+test('non-streaming create and follow-up still use invoke', async () => {
+  const store = new MemorySymptomStore();
+  store.addPatient('acct-a');
+  const ai = fakeAi();
+  const { storage } = mockStorage();
+  const app = buildApp({ store, ai, storage });
+
+  const created = await request(app)
+    .post('/v1/symptom')
+    .field('message', 'I have a headache');
+  assert.equal(created.status, 201);
+  assert.equal(created.body.messages.length, 1);
+
+  const id = created.body.symptom.id as string;
+  const followUp = await request(app)
+    .post(`/v1/symptom/${id}/follow-up`)
+    .field('message', 'Still there');
+
+  assert.equal(followUp.status, 200);
+  assert.equal(ai.invocations.length, 2);
+  assert.equal(ai.streamCalls.length, 0);
 });

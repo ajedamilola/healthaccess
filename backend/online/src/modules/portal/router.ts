@@ -15,6 +15,8 @@ import {
   READ_SESSION_MINUTES,
   assertActiveFields,
   createGrant,
+  findLiveGrantPatient,
+  quickShareFieldKeys,
   ensurePatientCode,
   findActiveChannelLink,
   isApprovedPractitioner,
@@ -70,8 +72,16 @@ const emergencyReadBody = z.object({
 });
 
 const grantOpenBody = z.object({
-  patient_code: z.string().min(1).max(32),
+  patient_code: z.string().min(1).max(32).optional(),
   grant_code: z.string().min(1).max(32),
+});
+
+const openBody = z.object({
+  code: z.string().min(1).max(40),
+});
+
+const quickShareBody = z.object({
+  expires_in_minutes: z.number().int().min(5).max(GRANT_MAX_MINUTES).optional(),
 });
 
 const limitQuery = z.coerce.number().int().min(1).max(100).default(50);
@@ -258,6 +268,54 @@ mePortalRouter.post('/grants', requireAuth, async (req, res) => {
   });
 });
 
+/**
+ * One tap: share the emergency summary (or every filled emergency-eligible field)
+ * as a single temporary code that works on the web and USSD.
+ */
+mePortalRouter.post('/grants/quick', requireAuth, async (req, res) => {
+  const auth = authOf(req);
+  const body = quickShareBody.parse(req.body ?? {});
+  const patient = await resolvePatient(auth.accountId);
+  const fieldKeys = await quickShareFieldKeys(patient.id);
+  if (!fieldKeys.length) {
+    throw new AppError(
+      400,
+      'Add some health information to your record before sharing it',
+      'nothing_to_share',
+    );
+  }
+  const channels: GrantChannel[] = ['WEB_PRACTITIONER', 'USSD'];
+  const minutes = body.expires_in_minutes ?? 60;
+  const { grant, code } = await createGrant({
+    patientId: patient.id,
+    accountId: auth.accountId,
+    fieldKeys,
+    channels,
+    expiresAt: new Date(Date.now() + minutes * 60 * 1000),
+  });
+  await recordAudit({
+    requestId: req.requestId,
+    actorAccountId: auth.accountId,
+    patientId: patient.id,
+    channel: 'WEB',
+    action: 'grant_create',
+    resourceType: 'access_grant',
+    resourceId: grant.id,
+    outcome: 'ALLOWED',
+    fieldKeys,
+  });
+  res.status(201).json({
+    available: true,
+    id: grant.id,
+    grant_id: grant.id,
+    code,
+    expires_at: grant.expires_at,
+    created_at: grant.created_at,
+    field_keys: fieldKeys,
+    channels,
+  });
+});
+
 mePortalRouter.delete('/grants/:id', requireAuth, async (req, res) => {
   const auth = authOf(req);
   const grantId = z.string().uuid().parse(req.params.id);
@@ -403,9 +461,8 @@ async function denyWebRead(input: {
   });
 }
 
-recordsRouter.post('/emergency', requireAuth, async (req, res) => {
+async function emergencyRead(req: Request, patientCodeInput: string): Promise<Record<string, unknown>> {
   const auth = authOf(req);
-  const body = emergencyReadBody.parse(req.body);
 
   if (await isAttemptThrottled('emergency_read', auth.accountId)) {
     await recordAttempt('emergency_read', auth.accountId, 'THROTTLED', req.requestId);
@@ -421,11 +478,10 @@ recordsRouter.post('/emergency', requireAuth, async (req, res) => {
       reasonCode: 'throttled',
       fieldKeys: [],
     });
-    res.json({ available: false });
-    return;
+    return { available: false };
   }
 
-  const digest = cryptoService.digestCode(body.patient_code, 'patient');
+  const digest = cryptoService.digestCode(patientCodeInput, 'patient');
   if (!digest) {
     await denyWebRead({
       req,
@@ -434,8 +490,7 @@ recordsRouter.post('/emergency', requireAuth, async (req, res) => {
       reason: 'invalid_patient_code',
       resourceType: 'patient_code',
     });
-    res.json({ available: false });
-    return;
+    return { available: false };
   }
 
   const patientCode = await prisma.patientCode.findUnique({
@@ -450,8 +505,7 @@ recordsRouter.post('/emergency', requireAuth, async (req, res) => {
       reason: 'unknown_patient_code',
       resourceType: 'patient_code',
     });
-    res.json({ available: false });
-    return;
+    return { available: false };
   }
 
   const projection = await emergencyProjection(patientCode.patient_id);
@@ -465,8 +519,7 @@ recordsRouter.post('/emergency', requireAuth, async (req, res) => {
       resourceType: 'patient_profile',
       resourceId: patientCode.patient_id,
     });
-    res.json({ available: false });
-    return;
+    return { available: false };
   }
 
   await recordAttempt('emergency_read', auth.accountId, 'ALLOWED', req.requestId);
@@ -482,10 +535,14 @@ recordsRouter.post('/emergency', requireAuth, async (req, res) => {
     fieldKeys: projection.fields.map((field) => field.key),
   });
 
-  res.json(projection);
-});
+  return { ...projection };
+}
 
-recordsRouter.post('/grant/open', requireAuth, async (req, res) => {
+async function grantOpen(
+  req: Request,
+  patientCodeInput: string | null,
+  grantCodeInput: string,
+): Promise<Record<string, unknown>> {
   const auth = authOf(req);
 
   if (!(await isApprovedPractitioner(auth.accountId, auth.roles))) {
@@ -504,8 +561,6 @@ recordsRouter.post('/grant/open', requireAuth, async (req, res) => {
     throw new AppError(403, 'Practitioner access required', 'forbidden');
   }
 
-  const body = grantOpenBody.parse(req.body);
-
   if (await isAttemptThrottled('grant_open', auth.accountId)) {
     await recordAttempt('grant_open', auth.accountId, 'THROTTLED', req.requestId);
     await recordAudit({
@@ -520,13 +575,13 @@ recordsRouter.post('/grant/open', requireAuth, async (req, res) => {
       reasonCode: 'throttled',
       fieldKeys: [],
     });
-    res.json({ available: false });
-    return;
+    return { available: false };
   }
 
-  const patientDigest = cryptoService.digestCode(body.patient_code, 'patient');
-  const grantDigest = cryptoService.digestCode(body.grant_code, 'grant');
-  if (!patientDigest || !grantDigest) {
+  const patientDigest =
+    patientCodeInput === null ? null : cryptoService.digestCode(patientCodeInput, 'patient');
+  const grantDigest = cryptoService.digestCode(grantCodeInput, 'grant');
+  if ((patientCodeInput !== null && !patientDigest) || !grantDigest) {
     await denyWebRead({
       req,
       accountId: auth.accountId,
@@ -534,24 +589,25 @@ recordsRouter.post('/grant/open', requireAuth, async (req, res) => {
       reason: 'invalid_code_format',
       resourceType: 'access_grant',
     });
-    res.json({ available: false });
-    return;
+    return { available: false };
   }
 
-  const patientCode = await prisma.patientCode.findUnique({
-    where: { code_digest: patientDigest },
-    select: { patient_id: true },
-  });
+  // One-code access: a temporary access code alone identifies its patient.
+  const patientCode = patientDigest
+    ? await prisma.patientCode.findUnique({
+        where: { code_digest: patientDigest },
+        select: { patient_id: true },
+      })
+    : await findLiveGrantPatient(grantDigest);
   if (!patientCode) {
     await denyWebRead({
       req,
       accountId: auth.accountId,
       action: 'grant_open',
-      reason: 'unknown_patient_code',
-      resourceType: 'patient_code',
+      reason: patientDigest ? 'unknown_patient_code' : 'grant_unavailable',
+      resourceType: patientDigest ? 'patient_code' : 'access_grant',
     });
-    res.json({ available: false });
-    return;
+    return { available: false };
   }
 
   const grant = await prisma.accessGrant.findFirst({
@@ -575,8 +631,7 @@ recordsRouter.post('/grant/open', requireAuth, async (req, res) => {
       patientId: patientCode.patient_id,
       resourceType: 'access_grant',
     });
-    res.json({ available: false });
-    return;
+    return { available: false };
   }
 
   if (!grant.channels.some((channel) => channel.channel === 'WEB_PRACTITIONER')) {
@@ -590,8 +645,7 @@ recordsRouter.post('/grant/open', requireAuth, async (req, res) => {
       resourceId: grant.id,
       fieldKeys: grant.fields.map((field) => field.field_key),
     });
-    res.json({ available: false });
-    return;
+    return { available: false };
   }
 
   const projection = await grantProjection(grant.id, patientCode.patient_id);
@@ -605,8 +659,7 @@ recordsRouter.post('/grant/open', requireAuth, async (req, res) => {
       resourceType: 'access_grant',
       resourceId: grant.id,
     });
-    res.json({ available: false });
-    return;
+    return { available: false };
   }
 
   const now = new Date();
@@ -656,12 +709,50 @@ recordsRouter.post('/grant/open', requireAuth, async (req, res) => {
     fieldKeys: projection.fields.map((field) => field.key),
   });
 
-  res.json({
+  return {
     ...projection,
     grant_id: grant.id,
     read_session_id: readSession.id,
     expires_at: readSession.expires_at,
-  });
+  };
+}
+
+recordsRouter.post('/emergency', requireAuth, async (req, res) => {
+  const body = emergencyReadBody.parse(req.body);
+  res.json(await emergencyRead(req, body.patient_code));
+});
+
+recordsRouter.post('/grant/open', requireAuth, async (req, res) => {
+  const body = grantOpenBody.parse(req.body);
+  res.json(await grantOpen(req, body.patient_code ?? null, body.grant_code));
+});
+
+/**
+ * One box for every code. 12 digits is a patient's emergency code (any signed-in
+ * user); 8 digits is a temporary access code (verified practitioners only).
+ */
+recordsRouter.post('/open', requireAuth, async (req, res) => {
+  const body = openBody.parse(req.body);
+  const code = body.code.replace(/[\s-]/g, '');
+  if (/^\d{12}$/.test(code)) {
+    const result = await emergencyRead(req, code);
+    res.json(result.available ? { kind: 'emergency', ...result } : result);
+    return;
+  }
+  if (/^\d{8}$/.test(code)) {
+    const auth = authOf(req);
+    if (!(await isApprovedPractitioner(auth.accountId, auth.roles))) {
+      throw new AppError(
+        403,
+        'Temporary access codes open only for verified practitioners. Ask the patient for their 12-digit emergency code.',
+        'practitioner_required',
+      );
+    }
+    const result = await grantOpen(req, null, code);
+    res.json(result.available ? { kind: 'grant', ...result } : result);
+    return;
+  }
+  throw new AppError(400, 'Enter the 12-digit emergency code or the 8-digit access code', 'invalid_code');
 });
 
 recordsRouter.get('/grant/:id', requireAuth, async (req, res) => {

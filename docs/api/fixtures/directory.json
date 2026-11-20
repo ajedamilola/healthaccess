@@ -1,7 +1,7 @@
 {
   "group": "Directory",
   "order": 30,
-  "description": "Public directory of active services, Nigerian areas and approved facilities. No authentication required.",
+  "description": "Public directory of active services, Nigerian areas and approved facilities, plus live Serper web results. No authentication required. Demo facilities are never returned.",
   "endpoints": [
     {
       "id": "directory-services",
@@ -9,7 +9,7 @@
       "method": "GET",
       "path": "/directory/services",
       "summary": "List active service codes.",
-      "description": "Returns active services ordered by sort_order and service_code.",
+      "description": "Returns active services ordered by sort_order and service_code. Service codes are the values accepted by /directory/facilities?service=.",
       "auth": "none",
       "roles": [],
       "contentType": "application/json",
@@ -49,7 +49,7 @@
       "method": "GET",
       "path": "/directory/areas",
       "summary": "Search Nigerian areas by name, city, region or alias.",
-      "description": "Exact matches are returned before prefix matches, de-duplicated by id. Only active NG areas are considered. limit is clamped to 1-10 and defaults to 5.",
+      "description": "Exact matches are returned before prefix matches, de-duplicated by id. Only active NG areas are considered. limit is clamped to 1-10 and defaults to 5. The seeded Ikeja area is a real area (is_demo false); legacy demo areas may still appear with is_demo true.",
       "auth": "none",
       "roles": [],
       "contentType": "application/json",
@@ -79,24 +79,26 @@
           "body": [
             {
               "id": "20000000-0000-4000-8000-000000000001",
-              "name": "Ikeja demo area",
+              "name": "Ikeja",
               "region": "Lagos",
               "city": "Ikeja",
-              "is_demo": true
+              "is_demo": false
             }
           ]
         }
       ],
       "curl": "curl -sS -X GET http://localhost:3000/v1/directory/areas?q=ikeja",
-      "notes": []
+      "notes": [
+        "Areas are reference data, not facilities. is_demo on an area does not affect facility visibility."
+      ]
     },
     {
       "id": "directory-facilities",
       "name": "Find facilities by service",
       "method": "GET",
       "path": "/directory/facilities",
-      "summary": "Find approved facilities offering a service near an area.",
-      "description": "Requires service and area_id. Approved facilities with an approved service entry are measured from the area centre and filtered by radius_km. Results are sorted by distance then name. limit is clamped to 1-10 and defaults to 3; radius_km is clamped to 1-200 and defaults to 25.",
+      "summary": "Find approved facilities and live web leads offering a service near an area.",
+      "description": "Requires service and area_id. Approved non-demo facilities with an approved service entry are measured from the area centre and filtered by radius_km, sorted by distance then name. When the approved results do not fill limit and include_live is true (the default), Serper Maps is searched for live places; those results are persisted as Source + WebLead rows and appended after directory rows, de-duplicated by name and address, and the merged list is capped at limit. limit is clamped to 1-10 and defaults to 3; radius_km is clamped to 1-200 and defaults to 25.",
       "auth": "none",
       "roles": [],
       "contentType": "application/json",
@@ -125,35 +127,56 @@
           "type": "integer",
           "required": false,
           "default": 3,
-          "description": "1-10; values outside the range are clamped."
+          "description": "1-10; values outside the range are clamped. Applies to the merged result set."
+        },
+        {
+          "name": "include_live",
+          "type": "boolean",
+          "required": false,
+          "default": true,
+          "description": "Accept true/false/1/0/yes/no/on/off. Set false to return verified directory rows only and skip Serper entirely."
         }
       ],
       "responses": [
         {
           "status": 200,
           "label": "OK",
-          "description": "Matching facilities with distance_km.",
+          "description": "Approved directory rows followed by unverified live leads, capped at limit.",
           "headers": {
             "content-type": "application/json; charset=utf-8"
           },
           "body": [
             {
-              "id": "20000000-0000-4000-8000-000000000002",
-              "name": "Demo Community Hospital",
-              "address": "12 Example Road, Ikeja",
-              "phone": null,
+              "id": "3f0e5b6a-8a4b-4c2f-9c7d-0a1b2c3d4e5f",
+              "name": "Ikeja General Hospital",
+              "address": "1 Hospital Road, Ikeja, Lagos",
+              "phone": "+2348011111111",
               "distance_km": 0.385,
-              "is_demo": true,
-              "service_code": "general"
+              "is_demo": false,
+              "service_code": "general",
+              "source": "directory",
+              "verification_status": "approved",
+              "source_url": null,
+              "source_reference": null,
+              "service_label": null,
+              "latitude": null,
+              "longitude": null
             },
             {
-              "id": "20000000-0000-4000-8000-000000000003",
-              "name": "Demo Child Health Clinic",
-              "address": "8 Sample Street, Ikeja",
-              "phone": null,
-              "distance_km": 0.547,
-              "is_demo": true,
-              "service_code": "general"
+              "id": "5c2a7b8d-1e2f-4a3b-9c4d-6e7f8a9b0c1d",
+              "name": "Lagos Emergency Clinic Ikeja",
+              "address": "24 Allen Avenue, Ikeja, Lagos",
+              "phone": "+2348022222222",
+              "distance_km": 1.204,
+              "is_demo": false,
+              "service_code": "general",
+              "source": "web",
+              "verification_status": "unverified",
+              "source_url": "https://maps.google.com/?cid=12345678901234567890",
+              "source_reference": "ChIJexamplePlaceId",
+              "service_label": "General care",
+              "latitude": 6.5966,
+              "longitude": 3.3512
             }
           ]
         },
@@ -182,7 +205,7 @@
         {
           "status": 400,
           "label": "Bad Request",
-          "description": "area_id is missing.",
+          "description": "area_id is not a uuid.",
           "headers": {
             "content-type": "application/json; charset=utf-8"
           },
@@ -192,15 +215,19 @@
             "issues": [
               {
                 "path": "area_id",
-                "message": "Required"
+                "message": "Invalid uuid"
               }
             ]
           }
         }
       ],
-      "curl": "curl -sS -X GET http://localhost:3000/v1/directory/facilities?service=general&area_id=20000000-0000-4000-8000-000000000001&radius_km=25",
+      "curl": "curl -sS -X GET 'http://localhost:3000/v1/directory/facilities?service=general&area_id=20000000-0000-4000-8000-000000000001&radius_km=25&include_live=true'",
       "notes": [
-        "Unknown area ids return an empty array, not 404."
+        "Unknown area ids return an empty array, not 404.",
+        "Directory rows always carry source \"directory\", verification_status \"approved\" and null live fields; live rows carry source \"web\", verification_status \"unverified\" and a source_url.",
+        "Live rows are persisted before the response is built, so the id is a web_lead uuid and can be fetched from /directory/facilities/{id}.",
+        "When Serper is unconfigured or the live request fails, the endpoint still returns the approved directory rows.",
+        "Demo facilities (is_demo true) are excluded from results and return 404 on detail."
       ]
     },
     {
@@ -208,8 +235,8 @@
       "name": "Get a facility",
       "method": "GET",
       "path": "/directory/facilities/{id}",
-      "summary": "Return one approved facility with its approved services.",
-      "description": "Returns the facility address, area, coordinates, verification timestamps, source trust tier and the sorted list of approved active services. Returns 404 not_found when the facility is missing or not APPROVED.",
+      "summary": "Return one approved facility, or a stored web lead.",
+      "description": "Looks for an APPROVED, non-demo facility with the id. If none exists, the id is looked up as a stored web lead (status UNVERIFIED or REVIEW_CANDIDATE). Otherwise returns 404 not_found. Approved facilities include their approved active services and source trust tier; web leads are labelled unverified and include source_url and the source metadata.",
       "auth": "none",
       "roles": [],
       "contentType": "application/json",
@@ -218,35 +245,41 @@
           "name": "id",
           "type": "uuid",
           "required": true,
-          "description": "Facility id from /directory/facilities."
+          "description": "Facility id or persisted web_lead id from /directory/facilities."
         }
       ],
       "responses": [
         {
           "status": 200,
           "label": "OK",
-          "description": "Facility detail with approved services.",
+          "description": "Approved facility detail with approved services.",
           "headers": {
             "content-type": "application/json; charset=utf-8"
           },
           "body": {
-            "id": "20000000-0000-4000-8000-000000000002",
-            "name": "Demo Community Hospital",
-            "address": "12 Example Road, Ikeja",
+            "id": "3f0e5b6a-8a4b-4c2f-9c7d-0a1b2c3d4e5f",
+            "name": "Ikeja General Hospital",
+            "address": "1 Hospital Road, Ikeja, Lagos",
             "area_id": "20000000-0000-4000-8000-000000000001",
             "area": {
               "id": "20000000-0000-4000-8000-000000000001",
-              "name": "Ikeja demo area",
+              "name": "Ikeja",
               "region": "Lagos",
               "city": "Ikeja"
             },
             "latitude": 6.6041,
             "longitude": 3.3489,
-            "phone": null,
+            "phone": "+2348011111111",
             "last_verified_at": "2026-11-17T15:43:56.515Z",
             "verified_at": "2026-11-17T15:43:56.515Z",
-            "is_demo": true,
+            "is_demo": false,
             "source_trust": "unknown",
+            "source": "directory",
+            "source_url": null,
+            "source_reference": null,
+            "service_label": null,
+            "verification_status": "approved",
+            "kind": "facility",
             "services": [
               {
                 "service_code": "general",
@@ -260,11 +293,59 @@
               }
             ]
           }
+        },
+        {
+          "status": 200,
+          "label": "OK",
+          "description": "Stored web-lead fallback for a live result id.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "id": "5c2a7b8d-1e2f-4a3b-9c4d-6e7f8a9b0c1d",
+            "name": "Lagos Emergency Clinic Ikeja",
+            "address": "24 Allen Avenue, Ikeja, Lagos",
+            "area_id": null,
+            "area": null,
+            "latitude": null,
+            "longitude": null,
+            "phone": "+2348022222222",
+            "last_verified_at": null,
+            "verified_at": null,
+            "is_demo": false,
+            "source_trust": "UNVERIFIED_WEB",
+            "source_url": "https://maps.google.com/?cid=12345678901234567890",
+            "source_reference": null,
+            "service_label": "General care",
+            "verification_status": "unverified",
+            "kind": "web_lead",
+            "services": [],
+            "metadata": {
+              "title": "Lagos Emergency Clinic Ikeja",
+              "service_code": "general",
+              "service_label": "General care",
+              "kind": "facility"
+            }
+          }
+        },
+        {
+          "status": 404,
+          "label": "Not Found",
+          "description": "Unknown id, a non-approved facility, or a demo facility.",
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "error": "not_found",
+            "message": "Facility not found",
+            "request_id": "0fd5b0ca-f1d3-4bf5-96e6-8f37bb22a91f"
+          }
         }
       ],
-      "curl": "curl -sS -X GET http://localhost:3000/v1/directory/facilities/20000000-0000-4000-8000-000000000002",
+      "curl": "curl -sS -X GET http://localhost:3000/v1/directory/facilities/3f0e5b6a-8a4b-4c2f-9c7d-0a1b2c3d4e5f",
       "notes": [
-        "latitude and longitude are numbers or null."
+        "latitude and longitude are numbers or null; live-lead detail exposes null coordinates because WebLead stores no coordinates.",
+        "Web-lead detail is not a verification: verify a facility by phone before referring a patient."
       ]
     }
   ]

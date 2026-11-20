@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Manrope } from "next/font/google";
+import { themeScript, THEME_COLORS } from "@/lib/theme";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
@@ -24,7 +25,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#070d0e",
+  themeColor: THEME_COLORS.light,
 };
 
 /*
@@ -41,11 +42,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       className={`${inter.variable} ${manrope.variable} ${manropeBrand.variable}`}
-      data-theme="dark"
+      data-theme="light"
       data-accent="green"
       suppressHydrationWarning
     >
       <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
         <script dangerouslySetInnerHTML={{ __html: preloadGate }} />
       </head>
       <body className="min-h-dvh antialiased">

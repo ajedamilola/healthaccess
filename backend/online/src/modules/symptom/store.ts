@@ -10,6 +10,7 @@ export interface SymptomRecord {
   summary: string | null;
   include_records: boolean;
   modify_history: boolean;
+  language: string;
   files: string[];
   thread_id: string | null;
   model_version: string | null;
@@ -22,6 +23,7 @@ export interface CreateSymptomRecordInput {
   account_id: string;
   include_records: boolean;
   modify_history: boolean;
+  language: string;
   thread_id: string | null;
   model_version: string | null;
 }
@@ -32,6 +34,7 @@ export type SymptomRecordPatch = Partial<
 
 export interface SymptomStore {
   findPatientId(accountId: string): Promise<string | null>;
+  findPreferredLanguage(accountId: string): Promise<string | null>;
   create(input: CreateSymptomRecordInput): Promise<SymptomRecord>;
   listByAccount(
     accountId: string,
@@ -54,6 +57,14 @@ export const prismaSymptomStore: SymptomStore = {
       select: { id: true },
     });
     return profile?.id ?? null;
+  },
+
+  async findPreferredLanguage(accountId) {
+    const profile = await prisma.patientProfile.findUnique({
+      where: { account_id: accountId },
+      select: { preferred_language: true },
+    });
+    return profile?.preferred_language ?? null;
   },
 
   async create(input) {

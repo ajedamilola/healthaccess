@@ -65,6 +65,7 @@ export function createRecordHandlers(seed: RecordHandlerSeed = {}) {
   return [
     http.get("/api/v1/me", () => HttpResponse.json(me)),
 
+
     http.patch("/api/v1/me", async ({ request }) => {
       const body = (await request.json()) as PatchMeBody;
       if (body.firstName || body.lastName) {
