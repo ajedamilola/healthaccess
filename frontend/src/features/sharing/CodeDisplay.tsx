@@ -44,8 +44,9 @@ export function CodeDisplay({
 
   const status = useMemo(() => {
     if (!allowReveal) return `${label} is visible. It will not be shown again.`;
-    return revealed ? `${label} is visible. It hides again in ${secondsLeft} seconds.` : `${label} is hidden.`;
-  }, [allowReveal, label, revealed, secondsLeft]);
+    if (!revealed) return `${label} is hidden.`;
+    return `${label} is visible. It hides automatically after ${Math.ceil(revealDurationMs / 1000)} seconds.`;
+  }, [allowReveal, label, revealed, revealDurationMs]);
 
   return (
     <div className={styles.codeDisplay}>
