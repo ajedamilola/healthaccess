@@ -5,7 +5,7 @@ Phase 2 (landing page) is done: dark v2, Murmur-style hero.
 Phase 3 is written: `scope.md` and `docs/BUILDER_PROMPT.md`, based on the live API snapshot in `docs/api/`.
 **M0 Foundation, M1 lanes and M2 integration are complete on `feat/m0-foundation`.**
 Final checks: typecheck, lint, build, 156 unit tests, 164 component tests, 28 mocked e2e tests and the live smoke are green.
-Next: reviewer checks step 2, then the branch can be merged.
+Pull request: https://github.com/ajedamilola/healthaccess/pull/12. Next: reviewer checks step 2.
 
 ## Completed
 - **Phase 0:** audit approved. Defaults D1–D5 accepted.
